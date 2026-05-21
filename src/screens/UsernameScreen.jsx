@@ -11,7 +11,6 @@ import {
 
 import Ionicons from '@react-native-vector-icons/ionicons';
 
-import auth from '@react-native-firebase/auth';
 import database from '@react-native-firebase/database';
 
 const UsernameScreen = ({ route, navigation }) => {

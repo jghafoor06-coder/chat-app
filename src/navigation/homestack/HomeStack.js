@@ -1,12 +1,15 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
+import { Platform, PermissionsAndroid, Alert, TouchableOpacity } from 'react-native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import Home from '../../screens/Home';
 import ChatScreen from '../../screens/ChatScreen';
 import ProfileScreen from '../../screens/ProfileScreen';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import Ionicons from '@react-native-vector-icons/ionicons';
-import { TouchableOpacity } from 'react-native';
 
+import auth from '@react-native-firebase/auth';
+import database from '@react-native-firebase/database';
+import messaging from '@react-native-firebase/messaging';
 import { getFocusedRouteNameFromRoute } from '@react-navigation/native';
 
 const Tab = createBottomTabNavigator();
@@ -25,6 +28,55 @@ const HomeStack = () => {
 };
 
 const TabNavigation = () => {
+  const permissionRequested = useRef(false);
+  const uid = auth().currentUser?.uid;
+
+  useEffect(() => {
+    const requestNotificationPermission = async () => {
+      if (permissionRequested.current || !uid) {
+        return;
+      }
+
+      permissionRequested.current = true;
+
+      try {
+        let granted = false;
+
+        if (Platform.OS === 'android') {
+          if (Platform.Version >= 33) {
+            const result = await PermissionsAndroid.request(
+              PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS,
+            );
+            granted = result === PermissionsAndroid.RESULTS.GRANTED;
+          } else {
+            granted = true;
+          }
+        } else {
+          const authStatus = await messaging().requestPermission();
+          granted =
+            authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
+            authStatus === messaging.AuthorizationStatus.PROVISIONAL;
+        }
+
+        if (!granted) {
+          Alert.alert('Permission denied', 'Notifications permission was not granted.');
+          return;
+        }
+
+        await messaging().registerDeviceForRemoteMessages();
+        const token = await messaging().getToken();
+
+        if (token) {
+          await database().ref(`/users/${uid}`).update({ fcmToken: token });
+        }
+      } catch (error) {
+        console.log('Notification permission error:', error);
+      }
+    };
+
+    requestNotificationPermission();
+  }, [uid]);
+
   return (
     <Tab.Navigator
       screenOptions={{

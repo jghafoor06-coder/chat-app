@@ -10,7 +10,6 @@ import {
   Keyboard,
   Platform,
   Image,
-  Modal,
   Animated,
 } from 'react-native';
 
@@ -18,11 +17,14 @@ import Ionicons from '@react-native-vector-icons/ionicons';
 
 import auth from '@react-native-firebase/auth';
 import database from '@react-native-firebase/database';
+import axios from 'axios';
 
 const ChatScreen = ({ route, navigation }) => {
   const { user } = route.params || {};
 
   const currentUser = auth().currentUser;
+
+  
 
   // PREVENT NULL ERROR
   if (!currentUser || !user) {
@@ -40,14 +42,19 @@ const ChatScreen = ({ route, navigation }) => {
   const [editText, setEditText] = useState('');
   const [editingMessageId, setEditingMessageId] = useState(null);
   const [keyboardOffset, setKeyboardOffset] = useState(0);
+  const [token, setToken] = useState(null);
+  const [isSending, setIsSending] = useState(false);
 
   const menuAnimation = useRef(new Animated.Value(0)).current;
   const flatListRef = useRef(null);
   const selectionMode = selectedMessages.length > 0;
 
+  //KEYBOARD HEIGHT FUNCTION
   useEffect(() => {
-    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
-    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showEvent =
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent =
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
 
     const showListener = Keyboard.addListener(showEvent, event => {
       setKeyboardOffset(event.endCoordinates?.height || 0);
@@ -75,6 +82,24 @@ const ChatScreen = ({ route, navigation }) => {
     const messageToEdit = getSelectedMessage();
     return messageToEdit?.senderId === currentUid;
   };
+
+  //GET TOKEN
+  useEffect(() => {
+    const getToken = async () => {
+      try {
+        const response = await axios.get(
+          'https://gettoken-5xp4oqaw2a-uc.a.run.app/',
+        );
+
+        setToken(response?.data?.token);
+        console.log(response.data);
+      } catch (error) {
+        console.log(error);
+      }
+    };
+
+    getToken();
+  }, []);
 
   // UNIQUE CHAT ID
   const chatId =
@@ -112,8 +137,6 @@ const ChatScreen = ({ route, navigation }) => {
     };
   }, [currentUid]);
 
-
-
   // GET MESSAGES
   useEffect(() => {
     const ref = database().ref(`/chats/${chatId}/messages`);
@@ -141,7 +164,9 @@ const ChatScreen = ({ route, navigation }) => {
 
   // SEND MESSAGE
   const sendMessage = async () => {
-    if (!message.trim()) return;
+    if (!message.trim() || isSending) return;
+
+    setIsSending(true);
 
     const msgData = {
       text: message,
@@ -155,7 +180,34 @@ const ChatScreen = ({ route, navigation }) => {
     await newMessageRef.set(msgData);
 
     setMessages(prev => [...prev, { id: newMessageRef.key, ...msgData }]);
+    try {
+      let result = await axios.post(
+        `https://fcm.googleapis.com/v1/projects/chatapp-82761/messages:send`,
+        {
+          message: {
+            token: receiverData?.fcmToken,
+
+            notification: {
+              title: currentUser.displayName || 'New Message',
+              body: message,
+            },
+          },
+        },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+        },
+      );
+
+      console.log('NOTIFICATION SENT', result.data);
+    } catch (error) {
+      console.log('Notification Error', error.message);
+    }
+
     setMessage('');
+    setIsSending(false);
 
     setTimeout(() => {
       flatListRef.current?.scrollToEnd({ animated: true });
@@ -364,7 +416,9 @@ const ChatScreen = ({ route, navigation }) => {
               style={[
                 styles.timeTextInside,
                 {
-                  color: isMe ? 'rgba(255,255,255,0.7)' : '#9ca3af',
+                  color: isMe
+                    ? 'rgba(231, 229, 229, 0.7)'
+                    : 'rgba(80, 78, 78, 0.7)',
                 },
               ]}
             >
@@ -522,12 +576,13 @@ const ChatScreen = ({ route, navigation }) => {
               multiline
             />
 
-            <Ionicons name="happy-outline" size={24} color="#6b7280" />
+            <Ionicons name="happy-outline" size={24} color="#6b7280"/>
           </View>
 
           <TouchableOpacity
-            style={styles.sendButton}
+            style={[styles.sendButton, isSending && styles.sendButtonDisabled]}
             onPress={isEditing ? saveEdit : sendMessage}
+            disabled={isSending}
           >
             <Ionicons
               name={isEditing ? 'checkmark' : 'send'}
@@ -563,7 +618,7 @@ const ChatScreen = ({ route, navigation }) => {
               ]}
             >
               <TouchableOpacity
-                style={[styles.menuItem, !canEdit() && styles.menuItemDisabled]}
+                style={[styles.menuItem, !canEdit()]}
                 onPress={startEdit}
                 disabled={!canEdit()}
               >
@@ -680,7 +735,7 @@ const styles = StyleSheet.create({
   },
 
   messageWrapper: {
-    marginBottom: 10,
+    marginBottom: 15,
     maxWidth: '75%',
   },
 
@@ -704,18 +759,23 @@ const styles = StyleSheet.create({
   },
 
   messageContainer: {
-    padding: 14,
+    flexDirection: 'row',
+    gap: 5,
+    paddingHorizontal: 14,
     borderRadius: 16,
+    paddingVertical: 8,
   },
 
   myMessage: {
     backgroundColor: '#0b5ed7',
-    borderBottomRightRadius: 4,
+    borderTopRightRadius: 1,
+    borderRadius: 22,
   },
 
   receiverMessage: {
     backgroundColor: '#f3f4f6',
-    borderBottomLeftRadius: 4,
+    borderTopLeftRadius: 1,
+    borderRadius: 22,
   },
 
   messageText: {
@@ -731,8 +791,8 @@ const styles = StyleSheet.create({
   },
 
   timeTextInside: {
-    fontSize: 11,
-    marginTop: 4,
+    fontSize: 10,
+    marginTop: 10,
     fontWeight: '400',
     alignSelf: 'flex-end',
   },

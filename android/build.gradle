@@ -5,16 +5,44 @@ buildscript {
         compileSdkVersion = 36
         targetSdkVersion = 36
         ndkVersion = "27.1.12297006"
+        
+        // CRITICAL: Define and USE this version
         kotlinVersion = "2.1.20"
+        
+        // CRITICAL: Override Firebase BOM to avoid Kotlin 2.3.0
+        firebaseBomVersion = "32.8.1"
     }
     repositories {
         google()
         mavenCentral()
     }
     dependencies {
-        classpath("com.android.tools.build:gradle")
+        // ✅ Fixed: Added explicit versions
+        classpath("com.android.tools.build:gradle:8.9.0")
         classpath("com.facebook.react:react-native-gradle-plugin")
-        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin")
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlinVersion")
+        classpath("com.google.gms:google-services:4.4.2")
+    }
+}
+
+// ✅ Added: Force all dependencies to use your Kotlin version
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+   configurations.all {
+        resolutionStrategy {
+            force "org.jetbrains.kotlin:kotlin-stdlib:$kotlinVersion"
+            force "org.jetbrains.kotlin:kotlin-stdlib-common:$kotlinVersion"
+            force "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlinVersion"
+            force "org.jetbrains.kotlin:kotlin-stdlib-jdk8:$kotlinVersion"
+            force "org.jetbrains.kotlin:kotlin-reflect:$kotlinVersion"
+            
+            // Use firebase-auth 24.0.0 (has setLinkDomain, check Kotlin compat)
+            // OR try 23.2.0 if 24.0.0 still has Kotlin issues
+            force "com.google.firebase:firebase-auth:24.0.0"
+        }
     }
 }
 
