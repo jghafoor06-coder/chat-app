@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -7,16 +7,17 @@ import {
   StyleSheet,
   Alert,
   ActivityIndicator,
+  Animated,
 } from 'react-native';
 
 import Ionicons from '@react-native-vector-icons/ionicons';
 
-import auth from '@react-native-firebase/auth';
 import database from '@react-native-firebase/database';
 
 const UsernameScreen = ({ route, navigation }) => {
   const [username, setUsername] = useState('');
   const [loading, setLoading] = useState(false);
+  const formAnim = useRef(new Animated.Value(0)).current;
 
 
   const saveUser = async () => {
@@ -50,9 +51,33 @@ const UsernameScreen = ({ route, navigation }) => {
   }
 };
 
+  useEffect(() => {
+    Animated.spring(formAnim, {
+      toValue: 1,
+      friction: 8,
+      tension: 40,
+      useNativeDriver: true,
+    }).start();
+  }, []);
+
   return (
     <View style={styles.container}>
-      <View style={styles.card}>
+      <Animated.View
+        style={[
+          styles.card,
+          {
+            opacity: formAnim,
+            transform: [
+              {
+                translateY: formAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [30, 0],
+                }),
+              },
+            ],
+          },
+        ]}
+      >
         {/* Top Icon */}
         <View style={styles.iconWrapper}>
           <Ionicons name="person-outline" size={28} color="#1d4ed8" />
@@ -142,7 +167,7 @@ const UsernameScreen = ({ route, navigation }) => {
             </Text>
           </Text>
         </TouchableOpacity>
-      </View>
+      </Animated.View>
     </View>
   );
 };

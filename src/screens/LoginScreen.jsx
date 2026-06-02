@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   TextInput,
@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   Keyboard,
   TouchableWithoutFeedback,
+  Animated,
 } from 'react-native';
 import { useIsFocused } from '@react-navigation/native';
 
@@ -21,7 +22,9 @@ const LoginScreen = ({ navigation }) => {
   const [confirm, setConfirm] = useState(null);
   const [code, setCode] = useState('');
   const [loading, setLoading] = useState(false);
+
   const isFocused = useIsFocused();
+  const formAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     if (!isFocused) return;
@@ -95,9 +98,33 @@ const LoginScreen = ({ navigation }) => {
     }
   };
 
+  useEffect(() => {
+    Animated.spring(formAnim, {
+      toValue: 1,
+      friction: 8,
+      tension: 40,
+      useNativeDriver: true,
+    }).start();
+  }, []);
+
   return (
     <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-      <View style={styles.container}>
+      <Animated.View
+        style={[
+          styles.container,
+          {
+            opacity: formAnim,
+            transform: [
+              {
+                translateY: formAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [20, 0],
+                }),
+              },
+            ],
+          },
+        ]}
+      >
         {!confirm ? (
           <>
             <Image
@@ -189,7 +216,7 @@ const LoginScreen = ({ navigation }) => {
             </TouchableOpacity>
           </>
         )}
-      </View>
+      </Animated.View>
     </TouchableWithoutFeedback>
   );
 };

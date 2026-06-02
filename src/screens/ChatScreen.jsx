@@ -3,28 +3,37 @@ import {
   View,
   Text,
   StyleSheet,
-  TouchableOpacity,
-  TextInput,
   FlatList,
   KeyboardAvoidingView,
   Keyboard,
   Platform,
-  Image,
-  Modal,
+  Linking,
+  TouchableOpacity,
   Animated,
 } from 'react-native';
 
 import Ionicons from '@react-native-vector-icons/ionicons';
+import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
+import { pick } from '@react-native-documents/picker';
+import RNFS from 'react-native-fs';
 
 import auth from '@react-native-firebase/auth';
 import database from '@react-native-firebase/database';
+import storage from '@react-native-firebase/storage';
+import axios from 'axios';
+
+import { updateChatSummaryOnSend, updateChatSummaryOnSeen, refreshChatSummary } from '../utils/chatSummary';
+import ChatHeader from '../components/chat/ChatHeader';
+import ChatInput from '../components/chat/ChatInput';
+import MessageBubble from '../components/chat/MessageBubble';
+import AttachmentMenu from '../components/chat/AttachmentMenu';
+import MessageContextMenu from '../components/chat/MessageContextMenu';
+import ImagePreviewModal from '../components/chat/ImagePreviewModal';
 
 const ChatScreen = ({ route, navigation }) => {
   const { user } = route.params || {};
-
   const currentUser = auth().currentUser;
 
-  // PREVENT NULL ERROR
   if (!currentUser || !user) {
     return null;
   }
@@ -39,25 +48,49 @@ const ChatScreen = ({ route, navigation }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState('');
   const [editingMessageId, setEditingMessageId] = useState(null);
-  const [keyboardOffset, setKeyboardOffset] = useState(0);
+  const [token, setToken] = useState(null);
+  const [isSending, setIsSending] = useState(false);
+  const [openEmojiPicker, setOpenEmojiPicker] = useState(false);
+  const [attachmentVisible, setAttachmentVisible] = useState(false);
+  const [imagePreviewVisible, setImagePreviewVisible] = useState(false);
+  const [imagePreviewUrl, setImagePreviewUrl] = useState('');
+  const [uploadProgress, setUploadProgress] = useState({});
 
   const menuAnimation = useRef(new Animated.Value(0)).current;
+  const keyboardHeight = useRef(new Animated.Value(0)).current;
   const flatListRef = useRef(null);
   const selectionMode = selectedMessages.length > 0;
 
+  //EMOJI PICKER KEYBOARD INTEGRATION
+  const handleEmojiSelect = emoji => {
+    setMessage(prev => prev + emoji.emoji);
+  };
+
+  // Synchronized Keyboard Tracking Animation
   useEffect(() => {
-    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
-    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showEvent =
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent =
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
 
     const showListener = Keyboard.addListener(showEvent, event => {
-      setKeyboardOffset(event.endCoordinates?.height || 0);
+      Animated.timing(keyboardHeight, {
+        toValue: event.endCoordinates?.height || 0,
+        duration: Platform.OS === 'ios' ? event.duration : 200,
+        useNativeDriver: false,
+      }).start();
+
       setTimeout(() => {
         flatListRef.current?.scrollToEnd({ animated: true });
-      }, 50);
+      }, 60);
     });
 
-    const hideListener = Keyboard.addListener(hideEvent, () => {
-      setKeyboardOffset(0);
+    const hideListener = Keyboard.addListener(hideEvent, event => {
+      Animated.timing(keyboardHeight, {
+        toValue: 0,
+        duration: Platform.OS === 'ios' ? event.duration : 200,
+        useNativeDriver: false,
+      }).start();
     });
 
     return () => {
@@ -76,7 +109,62 @@ const ChatScreen = ({ route, navigation }) => {
     return messageToEdit?.senderId === currentUid;
   };
 
-  // UNIQUE CHAT ID
+  // OPEN CAMERA FROM ATTACMENT MENU
+  const openCamera = async () => {
+    setAttachmentVisible(false);
+    const result = await launchCamera({
+      mediaType: 'photo',
+      saveToPhotos: true,
+    });
+    if (result?.assets?.length) {
+      await sendImageMessage(result.assets[0]);
+    }
+  };
+
+  // OPEN GALLERY FROM ATTACMENT MENU
+  const openGallery = async () => {
+    setAttachmentVisible(false);
+    const result = await launchImageLibrary({
+      mediaType: 'photo',
+      selectionLimit: 1,
+    });
+    if (result?.assets?.length) {
+      await sendImageMessage(result.assets[0]);
+    }
+  };
+
+  // OPEN FILES FROM ATTACMENT MENU
+  const openFiles = async () => {
+    setAttachmentVisible(false);
+
+    try {
+      const [result] = await pick({
+        mode: 'open',
+      });
+
+      if (!result) return;
+
+      await sendFileMessage(result);
+    } catch (err) {
+      console.log(err);
+    }
+  };
+
+  //GET TOKEN FOR IMAGE PERMISSIONS
+  useEffect(() => {
+    const getToken = async () => {
+      try {
+        const response = await axios.get(
+          'https://gettoken-5xp4oqaw2a-uc.a.run.app/',
+        );
+        setToken(response?.data?.token);
+      } catch (error) {
+        console.log(error);
+      }
+    };
+    getToken();
+  }, []);
+
   const chatId =
     currentUid > user.uid
       ? `${currentUid}_${user.uid}`
@@ -88,36 +176,25 @@ const ChatScreen = ({ route, navigation }) => {
 
     ref.on('value', snapshot => {
       const data = snapshot.val();
-
-      if (data) {
-        setReceiverData(data);
-      }
+      if (data) setReceiverData(data);
     });
 
     return () => ref.off();
   }, [user.uid]);
 
-  // ONLINE STATUS
+  //ONLINE STATUS TRACKING
   useEffect(() => {
     const onlineRef = database().ref(`/users/${currentUid}`);
-
-    onlineRef.update({
-      online: true,
-    });
-
+    onlineRef.update({ online: true });
     return () => {
-      onlineRef.update({
-        online: false,
-      });
+      onlineRef.update({ online: false });
     };
   }, [currentUid]);
 
-
-
-  // GET MESSAGES
+  //GET MESSAGES
   useEffect(() => {
     const ref = database().ref(`/chats/${chatId}/messages`);
-
+    ref.off();
     ref.on('value', snapshot => {
       const data = snapshot.val();
 
@@ -127,7 +204,6 @@ const ChatScreen = ({ route, navigation }) => {
           ...data[key],
         }));
 
-        // SORT NEWEST FIRST
         messageList.sort((a, b) => a.createdAt - b.createdAt);
 
         setMessages(messageList);
@@ -139,48 +215,338 @@ const ChatScreen = ({ route, navigation }) => {
     return () => ref.off();
   }, [chatId]);
 
-  // SEND MESSAGE
+  //MARK UNSEEN MESSAGES AS SEEN (separate from listener to avoid re-entrant cascade)
+  useEffect(() => {
+    if (!messages.length) return;
+    let hasUnseen = false;
+    messages.forEach(msg => {
+      if (msg.senderId !== currentUid && !msg.seen && !msg.uploading && !msg.uploadingImage) {
+        hasUnseen = true;
+        database()
+          .ref(`/chats/${chatId}/messages/${msg.id}`)
+          .update({ seen: true });
+      }
+    });
+    if (hasUnseen) {
+      updateChatSummaryOnSeen(chatId, currentUid);
+    }
+  }, [messages, chatId]);
+
+  // SEND TEXT MESSAGE
   const sendMessage = async () => {
-    if (!message.trim()) return;
+    if (!message.trim() || isSending) return;
+    try {
+      setIsSending(true);
+      const textMessage = message.trim();
+      const msgData = {
+        text: textMessage,
+        senderId: currentUid,
+        createdAt: Date.now(),
+        seen: false,
+      };
+      setMessage('');
+      const ref = database().ref(`/chats/${chatId}/messages`);
+      const newMessageRef = ref.push();
+      const localMessage = { id: newMessageRef.key, ...msgData };
 
-    const msgData = {
-      text: message,
-      senderId: currentUid,
-      createdAt: Date.now(),
-    };
+      setMessages(prev => [...prev, localMessage]);
+      await newMessageRef.set(msgData);
 
-    const ref = database().ref(`/chats/${chatId}/messages`);
-    const newMessageRef = ref.push();
+      await updateChatSummaryOnSend(chatId, currentUid, user.uid, textMessage, msgData.createdAt);
 
-    await newMessageRef.set(msgData);
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 100);
 
-    setMessages(prev => [...prev, { id: newMessageRef.key, ...msgData }]);
-    setMessage('');
-
-    setTimeout(() => {
-      flatListRef.current?.scrollToEnd({ animated: true });
-    }, 100);
+      if (receiverData?.fcmToken && token) {
+        try {
+          await axios.post(
+            'https://fcm.googleapis.com/v1/projects/chatapp-82761/messages:send',
+            {
+              message: {
+                token: receiverData.fcmToken,
+                notification: {
+                  title: currentUser.displayName || 'New Message',
+                  body: textMessage,
+                },
+              },
+            },
+            {
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${token}`,
+              },
+            },
+          );
+        } catch (error) {
+          console.log('Notification Error:', error.message);
+        }
+      }
+    } catch (error) {
+      console.log('SEND MESSAGE ERROR:', error);
+    } finally {
+      setIsSending(false);
+    }
   };
 
-  // DELETE MESSAGE(S)
+  // SEND IMAGE MESSAGE
+  const sendImageMessage = async imageAsset => {
+    if (!imageAsset || isSending) return;
+
+    try {
+      setIsSending(true);
+
+      let fileUri = imageAsset.uri;
+
+      if (!fileUri) {
+        throw new Error('Image URI is missing');
+      }
+
+      const ref = database().ref(`/chats/${chatId}/messages`);
+      const newMessageRef = ref.push();
+      const createdAt = Date.now();
+
+      const pendingMessage = {
+        id: newMessageRef.key,
+        senderId: currentUid,
+        createdAt: createdAt,
+        seen: false,
+        uploadingImage: true,
+        localImage: fileUri,
+      };
+
+      setMessages(prev => [...prev, pendingMessage]);
+
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 100);
+
+      if (fileUri.startsWith('content://')) {
+        const tempPath = `${RNFS.TemporaryDirectoryPath}/${Date.now()}_img.jpg`;
+        await RNFS.copyFile(fileUri, tempPath);
+        fileUri = tempPath;
+      }
+
+      const fileName = `${chatId}_${Date.now()}.jpg`;
+      const storagePath = `chat_images/${fileName}`;
+      const reference = storage().ref(storagePath);
+
+      const uploadTask = reference.putFile(fileUri);
+
+      await uploadTask;
+      const imageUrl = await reference.getDownloadURL();
+
+      const msgData = {
+        imageUrl: imageUrl,
+        senderId: currentUid,
+        createdAt: createdAt,
+        seen: false,
+      };
+
+      await newMessageRef.set(msgData);
+
+      await updateChatSummaryOnSend(chatId, currentUid, user.uid, '📷 Photo', createdAt);
+
+      setMessages(prev =>
+        prev.map(msg =>
+          msg.id === newMessageRef.key
+            ? { ...msg, imageUrl: imageUrl, uploadingImage: false, localImage: undefined }
+            : msg,
+        ),
+      );
+
+      if (receiverData?.fcmToken && token) {
+        try {
+          await axios.post(
+            'https://fcm.googleapis.com/v1/projects/chatapp-82761/messages:send',
+            {
+              message: {
+                token: receiverData.fcmToken,
+                notification: {
+                  title: currentUser.displayName || 'New Message',
+                  body: 'Sent an image',
+                },
+              },
+            },
+            {
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${token}`,
+              },
+            },
+          );
+        } catch (error) {
+          console.log('Notification Error:', error.message);
+        }
+      }
+    } catch (error) {
+      setMessages(prev => prev.filter(msg => !msg.uploadingImage));
+      console.log('SEND IMAGE ERROR:', error);
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  // SEND FILE MESSAGE
+  const sendFileMessage = async file => {
+    if (!file || isSending) return;
+
+    try {
+      setIsSending(true);
+      setAttachmentVisible(false);
+
+      let fileUri = file.uri || file.fileCopyUri || file.path;
+
+      const fileName =
+        file.name ||
+        file.fileName ||
+        (file.uri
+          ? (() => {
+              try {
+                return (file.uri.includes('%')
+                    ? decodeURIComponent(file.uri)
+                    : file.uri
+                  ).split('/').pop()?.split('?').shift() || '';
+              } catch {
+                return '';
+              }
+            })()
+          : '') ||
+        'Unknown file';
+      const fileSize = file.size || 0;
+      const fileType = file.type || 'application/octet-stream';
+
+      if (!fileUri) {
+        throw new Error('File URI is missing. File object: ' + JSON.stringify(file));
+      }
+
+      const ref = database().ref(`/chats/${chatId}/messages`);
+      const newMessageRef = ref.push();
+      const createdAt = Date.now();
+
+      const pendingMessage = {
+        id: newMessageRef.key,
+        senderId: currentUid,
+        createdAt: createdAt,
+        seen: false,
+        fileName: fileName,
+        fileSize: fileSize,
+        fileType: fileType,
+        uploading: true,
+      };
+
+      setMessages(prev => [...prev, pendingMessage]);
+
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 100);
+
+      if (fileUri.startsWith('content://')) {
+        const tempPath = `${RNFS.TemporaryDirectoryPath}/${Date.now()}_${fileName}`;
+        await RNFS.copyFile(fileUri, tempPath);
+        fileUri = tempPath;
+      }
+
+      const fileName_storage = `${chatId}_${Date.now()}_${fileName}`;
+      const storagePath = `chat_files/${fileName_storage}`;
+      const reference = storage().ref(storagePath);
+
+      const uploadTask = reference.putFile(fileUri);
+
+      uploadTask.on('state_changed', snapshot => {
+        const progress =
+          snapshot.totalBytes > 0
+            ? Math.round(
+                (snapshot.bytesTransferred / snapshot.totalBytes) * 100,
+              )
+            : 0;
+        setUploadProgress(prev => ({ ...prev, [newMessageRef.key]: progress }));
+      });
+
+      await uploadTask;
+      const fileUrl = await reference.getDownloadURL();
+
+      const msgData = {
+        fileUrl: fileUrl,
+        fileName: fileName,
+        fileType: fileType,
+        fileSize: fileSize,
+        senderId: currentUid,
+        createdAt: createdAt,
+        seen: false,
+      };
+
+      await newMessageRef.set(msgData);
+
+      await updateChatSummaryOnSend(chatId, currentUid, user.uid, `📄 ${fileName}`, createdAt);
+
+      setMessages(prev =>
+        prev.map(msg =>
+          msg.id === newMessageRef.key
+            ? { ...msgData, id: newMessageRef.key }
+            : msg,
+        ),
+      );
+
+      setUploadProgress(prev => {
+        const next = { ...prev };
+        delete next[newMessageRef.key];
+        return next;
+      });
+
+      if (receiverData?.fcmToken && token) {
+        try {
+          await axios.post(
+            'https://fcm.googleapis.com/v1/projects/chatapp-82761/messages:send',
+            {
+              message: {
+                token: receiverData.fcmToken,
+                notification: {
+                  title: currentUser.displayName || 'New Message',
+                  body: `Sent a file: ${fileName}`,
+                },
+              },
+            },
+            {
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${token}`,
+              },
+            },
+          );
+        } catch (error) {
+          console.log('Notification Error:', error.message);
+        }
+      }
+    } catch (error) {
+      setMessages(prev => prev.filter(msg => !msg.uploading));
+      setUploadProgress({});
+      console.log('SEND FILE ERROR:', error.message);
+      console.log('Full error:', error);
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  // DELETE MESSAGE
   const deleteMessage = async () => {
     if (!selectedMessages.length) return;
-
     const updates = {};
     selectedMessages.forEach(id => {
       updates[`/chats/${chatId}/messages/${id}`] = null;
     });
-
     await database().ref().update(updates);
     setMessages(prev => prev.filter(msg => !selectedMessages.includes(msg.id)));
     closeMenu();
     setSelectedMessages([]);
+
+    // Refresh summary so home screen shows the correct last message
+    await refreshChatSummary(chatId, currentUid, user.uid);
   };
 
-  // START EDIT
+  // START EDITING MESSAGE
   const startEdit = () => {
     if (!canEdit()) return;
-
     const messageToEdit = getSelectedMessage();
     setEditText(messageToEdit.text);
     setEditingMessageId(messageToEdit.id);
@@ -188,16 +554,12 @@ const ChatScreen = ({ route, navigation }) => {
     closeMenu();
   };
 
-  // SAVE EDIT
+  // SAVE EDITED MESSAGE
   const saveEdit = async () => {
     if (!editingMessageId || !editText.trim()) return;
-
     await database()
       .ref(`/chats/${chatId}/messages/${editingMessageId}`)
-      .update({
-        text: editText,
-        editedAt: Date.now(),
-      });
+      .update({ text: editText, editedAt: Date.now() });
 
     setMessages(prev =>
       prev.map(msg =>
@@ -206,21 +568,23 @@ const ChatScreen = ({ route, navigation }) => {
           : msg,
       ),
     );
-
     setIsEditing(false);
     setEditText('');
     setEditingMessageId(null);
     setSelectedMessages([]);
+
+    // Refresh summary if the edited message was the last one
+    await refreshChatSummary(chatId, currentUid, user.uid);
   };
 
-  // CANCEL EDIT
+  //CANCEL EDITING
   const cancelEdit = () => {
     setIsEditing(false);
     setEditText('');
     setEditingMessageId(null);
   };
 
-  // OPEN MENU
+  //OPEN MENU FOR SELECTED MESSAGE
   const openMenu = () => {
     setMenuVisible(true);
     Animated.spring(menuAnimation, {
@@ -230,7 +594,7 @@ const ChatScreen = ({ route, navigation }) => {
     }).start();
   };
 
-  // CLOSE MENU
+  // CLOSE MENU FOR SELECTED MESSAGE
   const closeMenu = () => {
     Animated.timing(menuAnimation, {
       toValue: 0,
@@ -241,21 +605,19 @@ const ChatScreen = ({ route, navigation }) => {
     });
   };
 
+  //TOGGLE MESSAGE SELECTION
   const toggleSelection = itemId => {
     setSelectedMessages(prev => {
       const nextSelection = prev.includes(itemId)
         ? prev.filter(id => id !== itemId)
         : [...prev, itemId];
-
       if (nextSelection.length === 0 && menuVisible) {
         closeMenu();
       }
-
       return nextSelection;
     });
   };
 
-  // HANDLE LONG PRESS
   const handleLongPress = item => {
     if (!selectionMode) {
       setSelectedMessages([item.id]);
@@ -264,116 +626,30 @@ const ChatScreen = ({ route, navigation }) => {
     }
   };
 
+  const openImagePreview = imageUrl => {
+    setImagePreviewUrl(imageUrl);
+    setImagePreviewVisible(true);
+  };
+
+  const openFileMessage = fileUrl => {
+    Linking.openURL(fileUrl).catch(err =>
+      console.log('OPEN FILE ERROR:', err.message),
+    );
+  };
+
   const handleMessagePress = item => {
     if (selectionMode) {
       toggleSelection(item.id);
+    } else if (item.imageUrl && item.imageUrl.trim() !== '') {
+      openImagePreview(item.imageUrl);
+    } else if (item.fileUrl && item.fileUrl.trim() !== '') {
+      openFileMessage(item.fileUrl);
     }
   };
 
   const clearSelection = () => {
     setSelectedMessages([]);
     closeMenu();
-  };
-
-  // RENDER AVATAR
-  const renderAvatar = () => {
-    // SHOW IMAGE IF EXISTS
-    if (receiverData?.profileImage && receiverData.profileImage.trim() !== '') {
-      return (
-        <Image
-          source={{ uri: receiverData.profileImage }}
-          style={styles.avatar}
-        />
-      );
-    }
-
-    // SHOW FIRST LETTER IF NO IMAGE
-    return (
-      <View style={styles.letterAvatar}>
-        <Text style={styles.letterText}>
-          {receiverData?.username
-            ? receiverData.username.charAt(0).toUpperCase()
-            : 'U'}
-        </Text>
-      </View>
-    );
-  };
-
-  // FORMAT TIME
-  const formatTime = timestamp => {
-    if (!timestamp) return '';
-    const date = new Date(timestamp);
-    let hours = date.getHours();
-    const minutes = date.getMinutes().toString().padStart(2, '0');
-    const ampm = hours >= 12 ? 'PM' : 'AM';
-    hours = hours % 12;
-    hours = hours ? hours : 12;
-    return `${hours}:${minutes} ${ampm}`;
-  };
-
-  // RENDER MESSAGE
-  const renderItem = ({ item }) => {
-    const isMe = item.senderId === currentUid;
-    const isSelected = selectedMessages.includes(item.id);
-
-    return (
-      <TouchableOpacity
-        activeOpacity={1}
-        onPress={() => handleMessagePress(item)}
-        onLongPress={() => handleLongPress(item)}
-        delayLongPress={300}
-      >
-        <View
-          style={[
-            styles.messageWrapper,
-            isMe ? styles.myMessageWrapper : styles.receiverMessageWrapper,
-            isSelected && styles.selectedMessage,
-          ]}
-        >
-          <View
-            style={[
-              styles.messageContainer,
-              isMe ? styles.myMessage : styles.receiverMessage,
-            ]}
-          >
-            <Text
-              style={[
-                styles.messageText,
-                {
-                  color: isMe ? '#fff' : '#111827',
-                },
-              ]}
-            >
-              {item.text}
-            </Text>
-
-            {item.editedAt && (
-              <Text
-                style={[
-                  styles.editedLabel,
-                  {
-                    color: isMe ? 'rgba(255,255,255,0.6)' : '#9ca3af',
-                  },
-                ]}
-              >
-                Edited
-              </Text>
-            )}
-
-            <Text
-              style={[
-                styles.timeTextInside,
-                {
-                  color: isMe ? 'rgba(255,255,255,0.7)' : '#9ca3af',
-                },
-              ]}
-            >
-              {formatTime(item.createdAt)}
-            </Text>
-          </View>
-        </View>
-      </TouchableOpacity>
-    );
   };
 
   return (
@@ -384,86 +660,14 @@ const ChatScreen = ({ route, navigation }) => {
     >
       <View style={styles.container}>
         {/* HEADER */}
-        <View style={styles.header}>
-          {selectionMode ? (
-            <>
-              <TouchableOpacity
-                onPress={clearSelection}
-                style={{ padding: 4 }}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              >
-                <View
-                  style={{
-                    width: 24,
-                    height: 24,
-                    justifyContent: 'center',
-                    alignItems: 'center',
-                  }}
-                >
-                  <Ionicons name="close" size={24} color="#111827" />
-                </View>
-              </TouchableOpacity>
-
-              <Text style={styles.selectedCount}>
-                {selectedMessages.length}
-              </Text>
-
-              <View style={styles.headerIcons}>
-                <TouchableOpacity
-                  onPress={openMenu}
-                  style={{ padding: 4 }}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                >
-                  <View
-                    style={{
-                      width: 24,
-                      height: 24,
-                      justifyContent: 'center',
-                      alignItems: 'center',
-                    }}
-                  >
-                    <Ionicons
-                      name="ellipsis-vertical"
-                      size={24}
-                      color="#111827"
-                    />
-                  </View>
-                </TouchableOpacity>
-              </View>
-            </>
-          ) : (
-            <>
-              <TouchableOpacity onPress={() => navigation.goBack()}>
-                <Ionicons name="arrow-back" size={24} color="#111827" />
-              </TouchableOpacity>
-
-              <View style={styles.userSection}>
-                {renderAvatar()}
-
-                <View style={{ marginLeft: 10 }}>
-                  <Text style={styles.username}>
-                    {receiverData?.username || 'User'}
-                  </Text>
-
-                  {receiverData?.online && (
-                    <Text style={styles.online}>Online</Text>
-                  )}
-                </View>
-              </View>
-
-              <View style={styles.headerIcons}>
-                <Ionicons
-                  name="videocam-outline"
-                  size={24}
-                  color="#111827"
-                  style={{ marginRight: 16 }}
-                />
-
-                <Ionicons name="call-outline" size={22} color="#111827" />
-              </View>
-            </>
-          )}
-        </View>
+        <ChatHeader
+          receiverData={receiverData}
+          navigation={navigation}
+          selectionMode={selectionMode}
+          selectedMessages={selectedMessages}
+          onClearSelection={clearSelection}
+          onOpenMenu={openMenu}
+        />
 
         {/* CHAT AREA */}
         <View style={styles.chatArea}>
@@ -471,14 +675,25 @@ const ChatScreen = ({ route, navigation }) => {
             ref={flatListRef}
             data={messages}
             keyExtractor={item => item.id}
-            renderItem={renderItem}
+            renderItem={({ item }) => (
+              <MessageBubble
+                item={item}
+                currentUid={currentUid}
+                isSelected={selectedMessages.includes(item.id)}
+                uploadProgress={uploadProgress}
+                onPress={() => handleMessagePress(item)}
+                onLongPress={() => handleLongPress(item)}
+              />
+            )}
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
-            contentContainerStyle={{
-              padding: 16,
-            }}
-            ListFooterComponent={<View style={{ height: 90 }} />}
+            contentContainerStyle={{ padding: 16 }}
+            ListFooterComponent={<View style={{ height: 20 }} />}
             extraData={[selectedMessages, isEditing]}
+            removeClippedSubviews={true}
+            maxToRenderPerBatch={10}
+            windowSize={5}
+            initialNumToRender={15}
           />
         </View>
 
@@ -499,105 +714,53 @@ const ChatScreen = ({ route, navigation }) => {
           </View>
         )}
 
-        {/* INPUT */}
-        <View
-          style={[
-            styles.inputContainer,
-            Platform.OS === 'android' && keyboardOffset > 0
-              ? { marginBottom: keyboardOffset }
-              : null,
-          ]}
-        >
-          <TouchableOpacity>
-            <Ionicons name="add-circle-outline" size={28} color="#0b5ed7" />
-          </TouchableOpacity>
+        {/* INPUT PANEL */}
+        <ChatInput
+          isEditing={isEditing}
+          message={message}
+          editText={editText}
+          isSending={isSending}
+          openEmojiPicker={openEmojiPicker}
+          keyboardHeight={keyboardHeight}
+          onMessageChange={setMessage}
+          onEditTextChange={setEditText}
+          onEmojiSelect={handleEmojiSelect}
+          onEmojiPickerOpen={() => setOpenEmojiPicker(true)}
+          onEmojiPickerClose={() => setOpenEmojiPicker(false)}
+          onSend={sendMessage}
+          onSaveEdit={saveEdit}
+          onAttachmentPress={() => {
+            Keyboard.dismiss();
+            setAttachmentVisible(true);
+          }}
+          onInputFocus={() => setAttachmentVisible(false)}
+        />
 
-          <View style={styles.inputBox}>
-            <TextInput
-              placeholder={isEditing ? 'Edit message...' : 'Message...'}
-              placeholderTextColor="#9ca3af"
-              value={isEditing ? editText : message}
-              onChangeText={isEditing ? setEditText : setMessage}
-              style={styles.input}
-              multiline
-            />
+        {/* ATTACHMENT MENU */}
+        <AttachmentMenu
+          visible={attachmentVisible}
+          onClose={() => setAttachmentVisible(false)}
+          onOpenCamera={openCamera}
+          onOpenGallery={openGallery}
+          onOpenFiles={openFiles}
+        />
 
-            <Ionicons name="happy-outline" size={24} color="#6b7280" />
-          </View>
+        {/* DROPDOWN MENU */}
+        <MessageContextMenu
+          visible={menuVisible}
+          canEdit={canEdit()}
+          menuAnimation={menuAnimation}
+          onEdit={startEdit}
+          onDelete={deleteMessage}
+          onClose={closeMenu}
+        />
 
-          <TouchableOpacity
-            style={styles.sendButton}
-            onPress={isEditing ? saveEdit : sendMessage}
-          >
-            <Ionicons
-              name={isEditing ? 'checkmark' : 'send'}
-              size={18}
-              color="#fff"
-            />
-          </TouchableOpacity>
-        </View>
-
-        {/* MENU */}
-        {menuVisible && (
-          <>
-            <TouchableOpacity
-              style={styles.menuOverlay}
-              activeOpacity={1}
-              onPress={closeMenu}
-            />
-
-            <Animated.View
-              style={[
-                styles.menuContainer,
-                {
-                  opacity: menuAnimation,
-                  transform: [
-                    {
-                      scale: menuAnimation.interpolate({
-                        inputRange: [0, 1],
-                        outputRange: [0.8, 1],
-                      }),
-                    },
-                  ],
-                },
-              ]}
-            >
-              <TouchableOpacity
-                style={[styles.menuItem, !canEdit() && styles.menuItemDisabled]}
-                onPress={startEdit}
-                disabled={!canEdit()}
-              >
-                <Ionicons
-                  name="create-outline"
-                  size={20}
-                  color={canEdit() ? '#111827' : '#9ca3af'}
-                />
-
-                <Text
-                  style={[
-                    styles.menuText,
-                    !canEdit() && styles.menuTextDisabled,
-                  ]}
-                >
-                  Edit
-                </Text>
-              </TouchableOpacity>
-
-              <View style={styles.menuDivider} />
-
-              <TouchableOpacity
-                style={[styles.menuItem, styles.menuItemDanger]}
-                onPress={deleteMessage}
-              >
-                <Ionicons name="trash-outline" size={20} color="#ef4444" />
-
-                <Text style={[styles.menuText, styles.menuTextDanger]}>
-                  Delete
-                </Text>
-              </TouchableOpacity>
-            </Animated.View>
-          </>
-        )}
+        {/* IMAGE PREVIEW MODAL */}
+        <ImagePreviewModal
+          visible={imagePreviewVisible}
+          imageUrl={imagePreviewUrl}
+          onClose={() => setImagePreviewVisible(false)}
+        />
       </View>
     </KeyboardAvoidingView>
   );
@@ -611,130 +774,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
   },
 
-  header: {
-    height: 90,
-    paddingHorizontal: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderBottomWidth: 1,
-    borderBottomColor: '#f3f4f6',
-    paddingTop: 20,
-  },
-
-  userSection: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginLeft: 14,
-  },
-
-  avatar: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-  },
-
-  letterAvatar: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: '#0b5ed7',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  letterText: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: '700',
-  },
-
-  username: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#111827',
-  },
-
-  online: {
-    color: '#22c55e',
-    fontSize: 13,
-    marginTop: 2,
-    fontWeight: '500',
-  },
-
-  headerIcons: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-
-  selectedCount: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#111827',
-    marginLeft: 20,
-    flex: 1,
-  },
-
   chatArea: {
     flex: 1,
-  },
-
-  messageWrapper: {
-    marginBottom: 10,
-    maxWidth: '75%',
-  },
-
-  myMessageWrapper: {
-    alignSelf: 'flex-end',
-    alignItems: 'flex-end',
-  },
-
-  receiverMessageWrapper: {
-    alignSelf: 'flex-start',
-    alignItems: 'flex-start',
-  },
-
-  selectedMessage: {
-    backgroundColor: 'rgba(14, 165, 233, 0.12)',
-    borderRadius: 8,
-    borderLeftWidth: 4,
-    borderLeftColor: '#4488ee',
-    width: '100%',
-    maxWidth: '100%',
-  },
-
-  messageContainer: {
-    padding: 14,
-    borderRadius: 16,
-  },
-
-  myMessage: {
-    backgroundColor: '#0b5ed7',
-    borderBottomRightRadius: 4,
-  },
-
-  receiverMessage: {
-    backgroundColor: '#f3f4f6',
-    borderBottomLeftRadius: 4,
-  },
-
-  messageText: {
-    fontSize: 15,
-    lineHeight: 22,
-  },
-
-  editedLabel: {
-    fontSize: 10,
-    marginTop: 4,
-    fontWeight: '500',
-    fontStyle: 'italic',
-  },
-
-  timeTextInside: {
-    fontSize: 11,
-    marginTop: 4,
-    fontWeight: '400',
-    alignSelf: 'flex-end',
   },
 
   editBar: {
@@ -759,104 +800,5 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#6b7280',
     flex: 1,
-  },
-
-  inputContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingTop: 10,
-    paddingBottom: Platform.OS === 'ios' ? 25 : 20,
-    borderTopWidth: 1,
-    borderTopColor: '#f3f4f6',
-    backgroundColor: '#fff',
-  },
-
-  inputBox: {
-    flex: 1,
-    minHeight: 52,
-    maxHeight: 120,
-    backgroundColor: '#f3f4f6',
-    borderRadius: 16,
-    marginHorizontal: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 14,
-  },
-
-  input: {
-    flex: 1,
-    fontSize: 15,
-    color: '#111827',
-    paddingVertical: 12,
-    maxHeight: 100,
-  },
-
-  sendButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#0b5ed7',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.3)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  menuOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 20,
-  },
-
-  menuContainer: {
-    position: 'absolute',
-    top: 90,
-    right: 16,
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    paddingVertical: 8,
-    width: 180,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 12,
-    elevation: 8,
-  },
-
-  menuItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-
-  menuText: {
-    marginLeft: 12,
-    fontSize: 16,
-    color: '#111827',
-    fontWeight: '500',
-  },
-
-  menuTextDanger: {
-    color: '#ef4444',
-  },
-
-  menuItemDisabled: {
-    opacity: 0.55,
-  },
-
-  menuTextDisabled: {
-    color: '#9ca3af',
-  },
-
-  menuDivider: {
-    height: 1,
-    backgroundColor: '#f3f4f6',
-    marginHorizontal: 16,
   },
 });

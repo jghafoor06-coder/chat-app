@@ -1,9 +1,18 @@
-  import React, { useEffect } from 'react';
-  import { View, Text, StyleSheet, Image } from 'react-native';
+  import React, { useEffect, useRef } from 'react';
+  import { View, Text, StyleSheet, Animated } from 'react-native';
   import auth from '@react-native-firebase/auth';
 
   const SplashScreen = ({ navigation }) => {
+    const logoAnim = useRef(new Animated.Value(0)).current;
+
     useEffect(() => {
+      Animated.spring(logoAnim, {
+        toValue: 1,
+        friction: 5,
+        tension: 40,
+        useNativeDriver: true,
+      }).start();
+
       const subscriber = auth().onAuthStateChanged(user => {
         if (user) {
           navigation.replace('Tabnavigation');
@@ -17,13 +26,26 @@
 
     return (
       <View style={styles.container}>
-        <Image
+        <Animated.Image
           source={require('../assets/image.png')}
-          style={styles.logo}
+          style={[
+            styles.logo,
+            {
+              opacity: logoAnim,
+              transform: [{
+                scale: logoAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0.6, 1],
+                }),
+              }],
+            },
+          ]}
         />
 
-        <Text style={styles.title}>Messages</Text>
-        <Text style={styles.subtitle}>Secure. Fast. Minimal</Text>
+        <View>
+          <Text style={styles.title}>Messages</Text>
+          <Text style={styles.subtitle}>Secure. Fast. Minimal</Text>
+        </View>
       </View>
     );
   };

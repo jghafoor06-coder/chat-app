@@ -10,9 +10,10 @@ import {
   PermissionsAndroid,
   Modal,
   ActivityIndicator,
+  Animated,
 } from 'react-native';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import Header from '../components/Header';
 import Ionicons from '@react-native-vector-icons/ionicons';
 
@@ -22,11 +23,26 @@ import storage from '@react-native-firebase/storage';
 
 import { launchImageLibrary } from 'react-native-image-picker';
 
+const SettingItem = React.memo(({ icon, title, color }) => {
+  return (
+    <View style={styles.item}>
+      <View style={[styles.iconBox, { backgroundColor: color }]}>
+        <Ionicons name={icon} size={20} color="#111827" />
+      </View>
+
+      <Text style={styles.itemText}>{title}</Text>
+
+      <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
+    </View>
+  );
+});
+
 const ProfileScreen = ({ navigation }) => {
   const [username, setUsername] = useState('');
   const [profileImage, setProfileImage] = useState(null);
   const [imageVisible, setImageVisible] = useState(false);
   const [imageLoading, setImageLoading] = useState(false);
+  const pageAnim = useRef(new Animated.Value(0)).current;
 
   const uid = auth().currentUser?.uid;
 
@@ -119,26 +135,36 @@ const ProfileScreen = ({ navigation }) => {
     }
   };
 
-  const SettingItem = ({ icon, title, color }) => {
-    return (
-      <View style={styles.item}>
-        <View style={[styles.iconBox, { backgroundColor: color }]}>
-          <Ionicons name={icon} size={20} color="#111827" />
-        </View>
-
-        <Text style={styles.itemText}>{title}</Text>
-
-        <Ionicons name="chevron-forward" size={20} color="#9ca3af" />
-      </View>
-    );
-  };
+  useEffect(() => {
+    Animated.spring(pageAnim, {
+      toValue: 1,
+      friction: 8,
+      tension: 40,
+      useNativeDriver: true,
+    }).start();
+  }, []);
 
   return (
     <View style={styles.main}>
       <Header title="Settings" />
 
       <ScrollView showsVerticalScrollIndicator={false}>
-        <View style={styles.container}>
+        <Animated.View
+          style={[
+            styles.container,
+            {
+              opacity: pageAnim,
+              transform: [
+                {
+                  translateY: pageAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [20, 0],
+                  }),
+                },
+              ],
+            },
+          ]}
+        >
           {/* PROFILE IMAGE */}
           <View style={styles.imageWrapper}>
             <TouchableOpacity onPress={() => setImageVisible(true)} activeOpacity={0.6}>
@@ -217,7 +243,7 @@ const ProfileScreen = ({ navigation }) => {
             <Ionicons name="log-out-outline" size={22} color="#dc2626" />
             <Text style={styles.logoutText}>Log Out</Text>
           </TouchableOpacity>
-        </View>
+        </Animated.View>
 
         // IMAGE MODAL
         <Modal
@@ -268,6 +294,7 @@ const styles = StyleSheet.create({
   main: {
     flex: 1,
     backgroundColor: '#f5f7fb',
+    overflow: 'hidden',
   },
 
   container: {

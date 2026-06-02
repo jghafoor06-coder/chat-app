@@ -10,18 +10,123 @@ import {
   TouchableOpacity,
 } from 'react-native';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import Header from '../components/Header';
 import Ionicons from '@react-native-vector-icons/ionicons';
 
 import auth from '@react-native-firebase/auth';
 import database from '@react-native-firebase/database';
 
+// FORMAT TIMESTAMP TO RELATIVE TIME LABEL
+const getChatTimeLabel = timestamp => {
+  if (!timestamp) return '';
+
+  const messageDate = new Date(timestamp);
+  const now = new Date();
+
+  const diffTime = now - messageDate;
+  const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+
+  // TODAY
+  if (diffDays === 0) {
+    return messageDate.toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  }
+
+  // YESTERDAY
+  if (diffDays === 1) {
+    return 'Yesterday';
+  }
+
+  // LAST 7 DAYS → weekday name
+  if (diffDays <= 7) {
+    return messageDate.toLocaleDateString([], {
+      weekday: 'long',
+    });
+  }
+
+  // OLDER → date
+  return messageDate.toLocaleDateString([], {
+    day: '2-digit',
+    month: 'short',
+  });
+};
+
+// MEMOIZED CHAT ROW — only re-renders when its specific props change
+const ChatRow = React.memo(({ item, currentUid, summary, onNavigate }) => {
+  const s = summary || {};
+  const chatId =
+    currentUid && currentUid > item.id
+      ? `${currentUid}_${item.id}`
+      : `${item.id}_${currentUid}`;
+
+  const lastMessageText = s.lastMessage?.trim()
+    ? s.lastSender === currentUid
+      ? `You: ${s.lastMessage}`
+      : s.lastMessage
+    : `Start chatting with ${item.username}`;
+
+  return (
+    <TouchableOpacity
+      activeOpacity={0.7}
+      style={styles.userRow}
+      onPress={() => onNavigate(chatId, item.id)}
+    >
+      {/* LEFT */}
+      <View style={styles.leftSection}>
+        {item.profileImage ? (
+          <Image source={{ uri: item.profileImage }} style={styles.avatarImage} />
+        ) : (
+          <View style={styles.avatar}>
+            <Text style={styles.avatarText}>
+              {item.username?.charAt(0)?.toUpperCase()}
+            </Text>
+          </View>
+        )}
+
+        {/* ONLINE DOT */}
+        {item.online && <View style={styles.onlineDot} />}
+      </View>
+
+      {/* CENTER */}
+      <View style={styles.middleSection}>
+        <Text style={styles.username} numberOfLines={1}>
+          {item.username || 'Unknown User'}
+        </Text>
+
+        <Text style={styles.message} numberOfLines={1}>
+          {lastMessageText}
+        </Text>
+      </View>
+
+      {/* RIGHT */}
+      <View style={styles.rightSection}>
+        {s.unreadCount > 0 ? (
+          <View style={styles.unreadBadge}>
+            <Text style={styles.unreadText} numberOfLines={1}>
+              {s.unreadCount}
+            </Text>
+          </View>
+        ) : (
+          <Text style={styles.timeText}>
+            {getChatTimeLabel(s.lastTimestamp)}
+          </Text>
+        )}
+      </View>
+    </TouchableOpacity>
+  );
+});
+
 const Home = ({ navigation }) => {
   const [users, setUsers] = useState([]);
   const [search, setSearch] = useState('');
   const [filteredUsers, setFilteredUsers] = useState([]);
   const [chatSummaries, setChatSummaries] = useState({});
+
+  const currentUser = auth().currentUser;
+  const currentUid = currentUser?.uid;
 
   useEffect(() => {
     const currentUser = auth().currentUser;
@@ -56,12 +161,34 @@ const Home = ({ navigation }) => {
     return () => usersRef.off('value', onValueChange);
   }, []);
 
+  // Single listener on denormalized chat summaries (replaces N per-chat listeners)
+  useEffect(() => {
+    const currentUser = auth().currentUser;
+    if (!currentUser) return;
+
+    const currentUid = currentUser.uid;
+    const ref = database().ref(`/userChats/${currentUid}`);
+
+    ref.on('value', snapshot => {
+      const data = snapshot.val();
+      if (data) {
+        setChatSummaries(data);
+      } else {
+        setChatSummaries({});
+      }
+    });
+
+    return () => ref.off();
+  }, []);
+
+  // One-time migration: populate summaries for existing chats that lack them
+  const migratedRef = useRef(new Set());
+
   useEffect(() => {
     const currentUser = auth().currentUser;
     if (!currentUser || users.length === 0) return;
 
     const currentUid = currentUser.uid;
-    const listeners = [];
 
     users.forEach(item => {
       const chatId =
@@ -69,189 +196,159 @@ const Home = ({ navigation }) => {
           ? `${currentUid}_${item.id}`
           : `${item.id}_${currentUid}`;
 
-      const ref = database().ref(`/chats/${chatId}/messages`);
-      const listener = ref.on('value', snapshot => {
-        const data = snapshot.val();
-        if (!data) {
-          setChatSummaries(prev => ({
-            ...prev,
-            [chatId]: { lastMessage: '', unreadCount: 0 },
-          }));
-          return;
-        }
+      // Skip if already migrated or summary already exists
+      if (migratedRef.current.has(chatId) || chatSummaries[chatId]) return;
+      migratedRef.current.add(chatId);
 
-        const messageList = Object.values(data);
-        const sortedMessages = messageList.sort(
-          (a, b) => b.createdAt - a.createdAt,
-        );
+      // Fetch last message from existing chat to build summary
+      const chatRef = database().ref(`/chats/${chatId}/messages`);
+      chatRef
+        .orderByChild('createdAt')
+        .limitToLast(1)
+        .once('value')
+        .then(snapshot => {
+          const data = snapshot.val();
+          if (!data) return;
 
-        const lastMessage = sortedMessages[0]?.text || '';
-        const lastSender = sortedMessages[0]?.senderId || null;
-        const unreadCount = sortedMessages.filter(
-          msg => msg.senderId !== currentUid,
-        ).length;
+          const lastMsg = Object.values(data)[0];
+          if (!lastMsg) return;
 
-        const lastTimestamp = sortedMessages[0]?.createdAt || null;
+          const summaryData = {
+            lastMessage: lastMsg.text || lastMsg.fileName || (lastMsg.imageUrl ? '📷 Photo' : ''),
+            lastSender: lastMsg.senderId || null,
+            lastTimestamp: lastMsg.createdAt || null,
+          };
 
-        setChatSummaries(prev => ({
-          ...prev,
-          [chatId]: {
-            lastMessage,
-            lastSender,
-            unreadCount,
-            lastTimestamp,
-          },
-        }));
-      });
+          // Count unread messages
+          chatRef
+            .orderByChild('seen')
+            .equalTo(false)
+            .once('value')
+            .then(unreadSnapshot => {
+              const unreadData = unreadSnapshot.val();
+              const unreadCount = unreadData
+                ? Object.values(unreadData).filter(
+                    msg => msg.senderId !== currentUid,
+                  ).length
+                : 0;
 
-      listeners.push(ref);
+              summaryData.unreadCount = unreadCount;
+
+              // Write summary for current user
+              database()
+                .ref(`/userChats/${currentUid}/${chatId}`)
+                .set(summaryData);
+
+              // Also write summary for the other user
+              database()
+                .ref(`/userChats/${item.id}/${chatId}`)
+                .set({
+                  ...summaryData,
+                  unreadCount: 0,
+                });
+            });
+        })
+        .catch(() => {}); // silently handle errors for chats with no data
     });
+  }, [users, chatSummaries]);
 
-    return () => {
-      listeners.forEach(ref => ref.off());
-    };
-  }, [users]);
+  // Sort users by most recent message timestamp (descending)
+  const sortedUsers = useMemo(() => {
+    if (!currentUid) return filteredUsers;
 
-  // SEARCH FUNCTION
-  const handleSearch = text => {
+    return [...filteredUsers].sort((a, b) => {
+      const chatIdA =
+        currentUid > a.id ? `${currentUid}_${a.id}` : `${a.id}_${currentUid}`;
+      const chatIdB =
+        currentUid > b.id ? `${currentUid}_${b.id}` : `${b.id}_${currentUid}`;
+
+      const timestampA = chatSummaries[chatIdA]?.lastTimestamp || 0;
+      const timestampB = chatSummaries[chatIdB]?.lastTimestamp || 0;
+
+      return timestampB - timestampA;
+    });
+  }, [filteredUsers, chatSummaries, currentUid]);
+
+  // SEARCH FUNCTION WITH 500MS DEBOUNCE
+  const debounceRef = useRef(null);
+  const usersRef = useRef(users);
+  usersRef.current = users;
+
+  const handleSearch = useCallback(text => {
     setSearch(text);
 
+    // Clear previous timeout
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+    }
+
+    // If empty, clear filter immediately
     if (text.trim() === '') {
-      setFilteredUsers(users);
+      setFilteredUsers(usersRef.current);
       return;
     }
 
-    const filtered = users.filter(item =>
-      item.username?.toLowerCase().includes(text.toLowerCase()),
-    );
-
-    setFilteredUsers(filtered);
-  };
-
-  // RENDER AVATAR
-  const renderAvatar = item => {
-    // IF USER HAS IMAGE
-    if (item.profileImage) {
-      return (
-        <Image source={{ uri: item.profileImage }} style={styles.avatarImage} />
+    // Set debounce timer
+    debounceRef.current = setTimeout(() => {
+      const filtered = usersRef.current.filter(item =>
+        item.username?.toLowerCase().includes(text.toLowerCase()),
       );
-    }
+      setFilteredUsers(filtered);
+    }, 500);
+  }, []); // stable reference — never recreated
 
-    // FIRST LETTER AVATAR
-    return (
-      <View style={styles.avatar}>
-        <Text style={styles.avatarText}>
-          {item.username?.charAt(0)?.toUpperCase()}
-        </Text>
-      </View>
-    );
-  };
+  // Cleanup debounce on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+      }
+    };
+  }, []);
 
-  //GET DAY WHEN MEASSAGE IS SENT
-  const getChatTimeLabel = timestamp => {
-    if (!timestamp) return '';
+  // STABLE NAVIGATE CALLBACK — never changes, so ChatRow's React.memo works
+  const handleNavigate = useCallback(
+    (chatId, userId) => {
+      setChatSummaries(prev => ({
+        ...prev,
+        [chatId]: {
+          ...prev[chatId],
+          unreadCount: 0,
+        },
+      }));
 
-    const messageDate = new Date(timestamp);
-    const now = new Date();
-
-    const diffTime = now - messageDate;
-    const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-
-    // TODAY
-    if (diffDays === 0) {
-      return messageDate.toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit',
+      navigation.navigate('Chatscreen', {
+        user: {
+          uid: userId,
+        },
       });
-    }
+    },
+    [navigation],
+  );
 
-    // YESTERDAY
-    if (diffDays === 1) {
-      return 'Yesterday';
-    }
-
-    // LAST 7 DAYS → weekday name
-    if (diffDays <= 7) {
-      return messageDate.toLocaleDateString([], {
-        weekday: 'long',
-      });
-    }
-
-    // OLDER → date
-    return messageDate.toLocaleDateString([], {
-      day: '2-digit',
-      month: 'short',
-    });
-  };
-
-  // USER ROW
+  // RENDER ITEM — passes stable props to memoized ChatRow
   const renderItem = ({ item }) => {
-    const currentUser = auth().currentUser;
-    const currentUid = currentUser?.uid;
     const chatId =
       currentUid && currentUid > item.id
         ? `${currentUid}_${item.id}`
         : `${item.id}_${currentUid}`;
-    const summary = chatSummaries[chatId] || {};
-    const lastMessageText = summary.lastMessage?.trim()
-      ? summary.lastSender === currentUid
-        ? `You: ${summary.lastMessage}`
-        : summary.lastMessage
-      : `Start chatting with ${item.username}`;
 
     return (
-      <TouchableOpacity
-        activeOpacity={0.7}
-        style={styles.userRow}
-        onPress={() => {
-          navigation.navigate('Chatscreen', {
-            user: {
-              uid: item.id,
-            },
-          });
-        }}
-      >
-        {/* LEFT */}
-        <View style={styles.leftSection}>
-          {renderAvatar(item)}
-
-          {/* ONLINE DOT */}
-          {item.online && <View style={styles.onlineDot} />}
-        </View>
-
-        {/* CENTER */}
-        <View style={styles.middleSection}>
-          <Text style={styles.username} numberOfLines={1}>
-            {item.username || 'Unknown User'}
-          </Text>
-
-          <Text style={styles.message} numberOfLines={1}>
-            {lastMessageText}
-          </Text>
-        </View>
-
-        {/* RIGHT */}
-        <View style={styles.rightSection}>
-          {summary.unreadCount > 0 ? (
-            <View style={styles.unreadBadge}>
-              <Text style={styles.unreadText} numberOfLines={1}>
-                {summary.unreadCount}
-              </Text>
-            </View>
-          ) : (
-            <Text style={styles.timeText}>
-              {getChatTimeLabel(summary.lastTimestamp)}
-            </Text>
-          )}
-        </View>
-      </TouchableOpacity>
+      <ChatRow
+        item={item}
+        currentUid={currentUid}
+        summary={chatSummaries[chatId]}
+        onNavigate={handleNavigate}
+      />
     );
   };
 
   return (
     <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
       <View style={styles.container}>
-        <Header title="Messages" />
+        <View>
+          <Header title="Messages" />
+        </View>
 
         {/* SEARCH */}
         <View style={styles.inputcontainer}>
@@ -275,11 +372,15 @@ const Home = ({ navigation }) => {
 
         {/* USERS LIST */}
         <FlatList
-          data={filteredUsers}
+          data={sortedUsers}
           keyExtractor={item => item.id}
           renderItem={renderItem}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.listContainer}
+          removeClippedSubviews={true}
+          maxToRenderPerBatch={10}
+          windowSize={7}
+          initialNumToRender={8}
         />
 
         {/* USER NOT FOUND */}
