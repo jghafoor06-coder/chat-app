@@ -7,7 +7,6 @@ import SocketIOClient from 'socket.io-client';
 import {
   mediaDevices,
   RTCPeerConnection,
-  RTCView,
   RTCIceCandidate,
   RTCSessionDescription,
 } from 'react-native-webrtc';
@@ -17,16 +16,34 @@ export const WebRTCContext = createContext();
 
 const navigationRef = React.createRef();
 
+// ICE servers config
+const ICE_SERVERS = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+  ],
+};
+
 const App = () => {
   const [localStream, setLocalStream] = useState(null);
   const [remoteStream, setRemoteStream] = useState(null);
-  const [callerId] = useState(Math.floor(100000 + Math.random() * 900000).toString());
+  const [callerId] = useState(
+    Math.floor(100000 + Math.random() * 900000).toString(),
+  );
   const [otherUserId, setOtherUserId] = useState(null);
   const [callType, setCallType] = useState('JOIN'); // JOIN, OUTGOING, INCOMING, WEBRTC_ROOM
   const [callStatus, setCallStatus] = useState(null); // ringing, answered, rejected, ended
 
   const socketRef = useRef(null);
   const peerConnectionRef = useRef(null);
+  // Use a ref to always have the latest otherUserId inside callbacks (avoids stale closure)
+  const otherUserIdRef = useRef(null);
+
+  // Keep otherUserIdRef in sync with state
+  useEffect(() => {
+    otherUserIdRef.current = otherUserId;
+  }, [otherUserId]);
 
   // Handle navigation based on call type changes
   useEffect(() => {
@@ -42,7 +59,7 @@ const App = () => {
     }
   }, [callType]);
 
-  // Initialize socket connection
+  // Initialize socket connection (once)
   useEffect(() => {
     socketRef.current = SocketIOClient('http://192.168.18.41:3500', {
       transports: ['websocket'],
@@ -58,66 +75,109 @@ const App = () => {
     };
   }, [callerId]);
 
-  // Initialize WebRTC
-  useEffect(() => {
-    peerConnectionRef.current = new RTCPeerConnection({
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' },
-      ],
-    });
+  /**
+   * Create a fresh RTCPeerConnection and wire up all its event handlers.
+   * Call this once at startup and again after a call ends to reset state.
+   */
+  const createPeerConnection = localMediaStream => {
+    // Close any existing connection first
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close();
+    }
 
-    // Handle incoming remote stream
-    peerConnectionRef.current.onaddstream = event => {
+    const pc = new RTCPeerConnection(ICE_SERVERS);
+
+    // Add local tracks to the connection
+    if (localMediaStream) {
+      localMediaStream.getTracks().forEach(track => {
+        pc.addTrack(track, localMediaStream);
+      });
+    }
+
+    // Receive remote stream
+    pc.ontrack = event => {
+      console.log('🎥 Remote track received');
+      if (event.streams && event.streams[0]) {
+        setRemoteStream(event.streams[0]);
+      }
+    };
+
+    // Deprecated but kept as fallback for older react-native-webrtc versions
+    pc.onaddstream = event => {
+      console.log('🎥 Remote stream added (legacy)');
       setRemoteStream(event.stream);
     };
 
-    // Handle ICE candidates
-    peerConnectionRef.current.onicecandidate = event => {
+    // ICE candidate — use ref to always get the latest target user id
+    pc.onicecandidate = event => {
       if (event.candidate) {
+        const targetId = otherUserIdRef.current;
+        console.log('🧊 ICE candidate, sending to:', targetId);
         socketRef.current?.emit('ICEcandidate', {
-          to: otherUserId,
-          candidate: event.candidate,
+          calleeId: targetId,
+          rtcMessage: {
+            type: 'candidate',
+            candidate: event.candidate,
+          },
         });
       }
     };
+
+    pc.oniceconnectionstatechange = () => {
+      console.log('ICE state:', pc.iceConnectionState);
+    };
+
+    peerConnectionRef.current = pc;
+    return pc;
+  };
+
+  // Get local media stream (once), then create the initial peer connection
+  useEffect(() => {
+    const init = async () => {
+      try {
+        const stream = await mediaDevices.getUserMedia({
+          audio: true,
+          video: {
+            width: {min: 500, ideal: 720, max: 1280},
+            height: {min: 300, ideal: 720, max: 1280},
+            frameRate: {ideal: 30, max: 60},
+          },
+        });
+
+        console.log('🎤 Local stream obtained');
+        setLocalStream(stream);
+        // Create connection with local stream already added
+        createPeerConnection(stream);
+      } catch (error) {
+        console.error('❌ Error accessing media devices:', error);
+      }
+    };
+
+    init();
 
     return () => {
       if (peerConnectionRef.current) {
         peerConnectionRef.current.close();
       }
     };
-  }, [otherUserId]);
-
-  // Get media streams
-  useEffect(() => {
-    const getMediaStream = async () => {
-      try {
-        const stream = await mediaDevices.getUserMedia({
-          audio: true,
-          video: {
-            width: { min: 500, ideal: 720, max: 1280 },
-            height: { min: 300, ideal: 720, max: 1280 },
-            frameRate: { ideal: 30, max: 60 },
-          },
-        });
-
-        setLocalStream(stream);
-        if (peerConnectionRef.current) {
-          peerConnectionRef.current.addStream(stream);
-        }
-      } catch (error) {
-        console.error('Error accessing media devices:', error);
-      }
-    };
-
-    getMediaStream();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Handle socket events
+  // Helper to reset call state and peer connection after a call ends
+  const resetCall = currentLocalStream => {
+    setCallType('JOIN');
+    setOtherUserId(null);
+    setCallStatus(null);
+    setRemoteStream(null);
+    // Recreate peer connection ready for next call
+    createPeerConnection(currentLocalStream);
+  };
+
+  // Handle all socket events (once socket is ready)
   useEffect(() => {
-    if (!socketRef.current) return;
+    if (!socketRef.current) {
+      return;
+    }
 
     console.log('🔌 Setting up socket event listeners...');
 
@@ -129,48 +189,62 @@ const App = () => {
       console.log('❌ Socket disconnected');
     });
 
-    // Receive incoming call
-    socketRef.current.on('callUser', async data => {
-      console.log('📞 Incoming call from:', data.callerName);
-      setOtherUserId(data.callerName);
+    /**
+     * Server event: "newCall"  (server emits this when someone calls us)
+     * Payload: { callerId, rtcMessage }   where rtcMessage is the SDP offer
+     */
+    socketRef.current.on('newCall', async data => {
+      console.log('📞 Incoming call from:', data.callerId);
+      setOtherUserId(data.callerId);
+      otherUserIdRef.current = data.callerId;
       setCallStatus('ringing');
-      setCallType('INCOMING');
 
       try {
-        // Store the offer for later
-        if (peerConnectionRef.current && !peerConnectionRef.current.remoteDescription) {
+        if (peerConnectionRef.current) {
           await peerConnectionRef.current.setRemoteDescription(
-            new RTCSessionDescription(data.signalData)
+            new RTCSessionDescription(data.rtcMessage),
           );
           console.log('✅ Remote description set from offer');
         }
       } catch (error) {
-        console.error('❌ Error setting remote description:', error);
+        console.error('❌ Error setting remote description from offer:', error);
       }
+
+      // Navigate AFTER remote description is set
+      setCallType('INCOMING');
     });
 
-    // Receive call answered
+    /**
+     * Server event: "callAnswered"  (callee answered our outgoing call)
+     * Payload: { callee, rtcMessage }   where rtcMessage is the SDP answer
+     */
     socketRef.current.on('callAnswered', async data => {
-      console.log('✅ Call answered by:', data.from);
+      console.log('✅ Call answered by:', data.callee);
       setCallStatus('answered');
+
       try {
-        if (peerConnectionRef.current && !peerConnectionRef.current.remoteDescription) {
+        if (peerConnectionRef.current) {
           await peerConnectionRef.current.setRemoteDescription(
-            new RTCSessionDescription(data.signalData)
+            new RTCSessionDescription(data.rtcMessage),
           );
           console.log('✅ Remote description set from answer');
         }
       } catch (error) {
-        console.error('❌ Error setting remote description:', error);
+        console.error('❌ Error setting remote description from answer:', error);
       }
+
+      setCallType('WEBRTC_ROOM');
     });
 
-    // Receive ICE candidates
-    socketRef.current.on('ICEcandidate', data => {
+    /**
+     * Server event: "ICEcandidate"
+     * Payload: { sender, rtcMessage }  where rtcMessage contains the candidate
+     */
+    socketRef.current.on('ICEcandidate', async data => {
       try {
-        if (peerConnectionRef.current && data.candidate) {
-          peerConnectionRef.current.addIceCandidate(
-            new RTCIceCandidate(data.candidate)
+        if (peerConnectionRef.current && data.rtcMessage?.candidate) {
+          await peerConnectionRef.current.addIceCandidate(
+            new RTCIceCandidate(data.rtcMessage.candidate),
           );
           console.log('✅ ICE candidate added');
         }
@@ -179,7 +253,7 @@ const App = () => {
       }
     });
 
-    // Receive call rejected
+    // Call rejected by callee
     socketRef.current.on('callRejected', () => {
       console.log('❌ Call rejected');
       setCallType('JOIN');
@@ -187,30 +261,23 @@ const App = () => {
       setCallStatus(null);
     });
 
-    // Receive call ended
-    socketRef.current.on('callEnded', () => {
-      console.log('📞 Call ended');
-      setCallType('JOIN');
-      setOtherUserId(null);
-      setCallStatus(null);
-      if (localStream) {
-        localStream.getTracks().forEach(track => track.stop());
-      }
-      if (remoteStream) {
-        remoteStream.getTracks().forEach(track => track.stop());
-      }
+    // Remote side ended the call
+    socketRef.current.on('endCall', () => {
+      console.log('📞 Call ended by remote');
+      resetCall(localStream);
     });
 
     return () => {
       socketRef.current?.off('connect');
       socketRef.current?.off('disconnect');
-      socketRef.current?.off('callUser');
+      socketRef.current?.off('newCall');
       socketRef.current?.off('callAnswered');
       socketRef.current?.off('callRejected');
       socketRef.current?.off('ICEcandidate');
-      socketRef.current?.off('callEnded');
+      socketRef.current?.off('endCall');
     };
-  }, [localStream, remoteStream]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [localStream]);
 
   const contextValue = {
     localStream,
@@ -224,6 +291,8 @@ const App = () => {
     setCallStatus,
     socketRef,
     peerConnectionRef,
+    resetCall,
+    localStreamRef: localStream,
   };
 
   return (

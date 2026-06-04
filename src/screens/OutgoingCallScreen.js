@@ -1,11 +1,10 @@
-import React, { useContext, useEffect } from 'react';
+import React, { useContext } from 'react';
 import {
   View,
   Text,
   TouchableOpacity,
   StyleSheet,
 } from 'react-native';
-import { RTCSessionDescription } from 'react-native-webrtc';
 import { WebRTCContext } from '../../App';
 
 const OutgoingCallScreen = ({ navigation }) => {
@@ -14,7 +13,6 @@ const OutgoingCallScreen = ({ navigation }) => {
     callStatus,
     setCallType,
     setOtherUserId,
-    peerConnectionRef,
     socketRef,
   } = useContext(WebRTCContext);
 
@@ -27,26 +25,9 @@ const OutgoingCallScreen = ({ navigation }) => {
     navigation.goBack();
   };
 
-  useEffect(() => {
-    // Listen for call answered
-    const handleCallAnswered = async data => {
-      try {
-        await peerConnectionRef.current.setRemoteDescription(
-          new RTCSessionDescription(data.signalData)
-        );
-        setCallType('WEBRTC_ROOM');
-        navigation.navigate('WebRTCRoom');
-      } catch (error) {
-        console.error('Error handling call answered:', error);
-      }
-    };
+  // Navigation to WebRTCRoom happens automatically in App.jsx
+  // when the "callAnswered" socket event is received.
 
-    socketRef.current?.on('callAnswered', handleCallAnswered);
-
-    return () => {
-      socketRef.current?.off('callAnswered', handleCallAnswered);
-    };
-  }, [otherUserId]);
 
   return (
     <View style={styles.container}>

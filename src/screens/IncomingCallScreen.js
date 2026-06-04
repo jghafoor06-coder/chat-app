@@ -20,17 +20,19 @@ const IncomingCallScreen = ({ navigation }) => {
   const handleAnswerCall = async () => {
     try {
       setCallStatus('answered');
-      setCallType('WEBRTC_ROOM');
-      
+
       const answer = await peerConnectionRef.current.createAnswer();
       await peerConnectionRef.current.setLocalDescription(answer);
-      
+
+      // Server expects: "answerCall" event with { callerId, rtcMessage }
       socketRef.current?.emit('answerCall', {
-        to: otherUserId,
-        signalData: answer,
+        callerId: otherUserId,
+        rtcMessage: answer,
       });
 
-      // Navigate to video call screen
+      // Navigation to WebRTCRoom is handled by App.jsx when "callAnswered" is received
+      // but since we are the callee, we navigate directly
+      setCallType('WEBRTC_ROOM');
       navigation.navigate('WebRTCRoom');
     } catch (error) {
       console.error('Error answering call:', error);

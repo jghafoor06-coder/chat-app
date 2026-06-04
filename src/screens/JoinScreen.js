@@ -37,17 +37,16 @@ const JoinScreen = ({ navigation }) => {
 
       console.log('📞 Creating offer to call:', targetUserId);
 
-      // Create offer
+      // Create SDP offer
       const offer = await peerConnectionRef.current.createOffer();
       await peerConnectionRef.current.setLocalDescription(offer);
 
       console.log('✅ Offer created, sending to:', targetUserId);
 
-      // Send call to target user
-      socketRef.current?.emit('callUser', {
-        to: targetUserId,
-        signalData: offer,
-        callerName: callerId,
+      // Server expects: "call" event with { calleeId, rtcMessage }
+      socketRef.current?.emit('call', {
+        calleeId: targetUserId,
+        rtcMessage: offer,
       });
 
       console.log('📤 Call emitted via socket.io');
