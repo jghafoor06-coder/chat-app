@@ -15,6 +15,8 @@ import {
 // Create context for sharing WebRTC state across screens
 export const WebRTCContext = createContext();
 
+const navigationRef = React.createRef();
+
 const App = () => {
   const [localStream, setLocalStream] = useState(null);
   const [remoteStream, setRemoteStream] = useState(null);
@@ -25,6 +27,20 @@ const App = () => {
 
   const socketRef = useRef(null);
   const peerConnectionRef = useRef(null);
+
+  // Handle navigation based on call type changes
+  useEffect(() => {
+    if (callType === 'INCOMING') {
+      console.log('Navigating to IncomingCall');
+      navigationRef.current?.navigate('IncomingCall');
+    } else if (callType === 'OUTGOING') {
+      console.log('Navigating to OutgoingCall');
+      navigationRef.current?.navigate('OutgoingCall');
+    } else if (callType === 'WEBRTC_ROOM') {
+      console.log('Navigating to WebRTCRoom');
+      navigationRef.current?.navigate('WebRTCRoom');
+    }
+  }, [callType]);
 
   // Initialize socket connection
   useEffect(() => {
@@ -76,90 +92,104 @@ const App = () => {
 
   // Get media streams
   useEffect(() => {
-    let isFront = false;
-
-    mediaDevices.enumerateDevices().then(sourceInfos => {
-      let videoSourceId;
-      for (let i = 0; i < sourceInfos.length; i++) {
-        const sourceInfo = sourceInfos[i];
-        if (
-          sourceInfo.kind === 'videoinput' &&
-          sourceInfo.facing === (isFront ? 'user' : 'environment')
-        ) {
-          videoSourceId = sourceInfo.deviceId;
-        }
-      }
-
-      mediaDevices
-        .getUserMedia({
+    const getMediaStream = async () => {
+      try {
+        const stream = await mediaDevices.getUserMedia({
           audio: true,
           video: {
-            mandatory: {
-              minWidth: 500,
-              minHeight: 300,
-              minFrameRate: 30,
-            },
-            facingMode: isFront ? 'user' : 'environment',
-            optional: videoSourceId ? [{ sourceId: videoSourceId }] : [],
+            width: { min: 500, ideal: 720, max: 1280 },
+            height: { min: 300, ideal: 720, max: 1280 },
+            frameRate: { ideal: 30, max: 60 },
           },
-        })
-        .then(stream => {
-          setLocalStream(stream);
-          if (peerConnectionRef.current) {
-            peerConnectionRef.current.addStream(stream);
-          }
-        })
-        .catch(error => {
-          console.error('Error accessing media devices:', error);
         });
-    });
+
+        setLocalStream(stream);
+        if (peerConnectionRef.current) {
+          peerConnectionRef.current.addStream(stream);
+        }
+      } catch (error) {
+        console.error('Error accessing media devices:', error);
+      }
+    };
+
+    getMediaStream();
   }, []);
 
   // Handle socket events
   useEffect(() => {
     if (!socketRef.current) return;
 
-    socketRef.current.on('newCall', async data => {
-      setOtherUserId(data.from);
+    console.log('🔌 Setting up socket event listeners...');
+
+    socketRef.current.on('connect', () => {
+      console.log('✅ Socket connected with ID:', socketRef.current.id);
+    });
+
+    socketRef.current.on('disconnect', () => {
+      console.log('❌ Socket disconnected');
+    });
+
+    // Receive incoming call
+    socketRef.current.on('callUser', async data => {
+      console.log('📞 Incoming call from:', data.callerName);
+      setOtherUserId(data.callerName);
       setCallStatus('ringing');
       setCallType('INCOMING');
 
-      // Create and send offer
       try {
-        const offer = await peerConnectionRef.current.createOffer();
-        await peerConnectionRef.current.setLocalDescription(offer);
-        socketRef.current.emit('callUser', {
-          to: data.from,
-          signalData: offer,
-          callerName: callerId,
-        });
+        // Store the offer for later
+        if (peerConnectionRef.current && !peerConnectionRef.current.remoteDescription) {
+          await peerConnectionRef.current.setRemoteDescription(
+            new RTCSessionDescription(data.signalData)
+          );
+          console.log('✅ Remote description set from offer');
+        }
       } catch (error) {
-        console.error('Error creating offer:', error);
+        console.error('❌ Error setting remote description:', error);
       }
     });
 
+    // Receive call answered
     socketRef.current.on('callAnswered', async data => {
+      console.log('✅ Call answered by:', data.from);
       setCallStatus('answered');
       try {
-        await peerConnectionRef.current.setRemoteDescription(
-          new RTCSessionDescription(data.signalData)
-        );
+        if (peerConnectionRef.current && !peerConnectionRef.current.remoteDescription) {
+          await peerConnectionRef.current.setRemoteDescription(
+            new RTCSessionDescription(data.signalData)
+          );
+          console.log('✅ Remote description set from answer');
+        }
       } catch (error) {
-        console.error('Error setting remote description:', error);
+        console.error('❌ Error setting remote description:', error);
       }
     });
 
+    // Receive ICE candidates
     socketRef.current.on('ICEcandidate', data => {
       try {
-        peerConnectionRef.current.addIceCandidate(
-          new RTCIceCandidate(data.candidate)
-        );
+        if (peerConnectionRef.current && data.candidate) {
+          peerConnectionRef.current.addIceCandidate(
+            new RTCIceCandidate(data.candidate)
+          );
+          console.log('✅ ICE candidate added');
+        }
       } catch (error) {
-        console.error('Error adding ICE candidate:', error);
+        console.error('❌ Error adding ICE candidate:', error);
       }
     });
 
+    // Receive call rejected
+    socketRef.current.on('callRejected', () => {
+      console.log('❌ Call rejected');
+      setCallType('JOIN');
+      setOtherUserId(null);
+      setCallStatus(null);
+    });
+
+    // Receive call ended
     socketRef.current.on('callEnded', () => {
+      console.log('📞 Call ended');
       setCallType('JOIN');
       setOtherUserId(null);
       setCallStatus(null);
@@ -172,12 +202,15 @@ const App = () => {
     });
 
     return () => {
-      socketRef.current?.off('newCall');
+      socketRef.current?.off('connect');
+      socketRef.current?.off('disconnect');
+      socketRef.current?.off('callUser');
       socketRef.current?.off('callAnswered');
+      socketRef.current?.off('callRejected');
       socketRef.current?.off('ICEcandidate');
       socketRef.current?.off('callEnded');
     };
-  }, [callerId, localStream, remoteStream]);
+  }, [localStream, remoteStream]);
 
   const contextValue = {
     localStream,
@@ -195,7 +228,7 @@ const App = () => {
 
   return (
     <WebRTCContext.Provider value={contextValue}>
-      <NavigationContainer>
+      <NavigationContainer ref={navigationRef}>
         <Root />
       </NavigationContainer>
     </WebRTCContext.Provider>

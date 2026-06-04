@@ -35,9 +35,13 @@ const JoinScreen = ({ navigation }) => {
       setCallStatus('ringing');
       setCallType('OUTGOING');
 
+      console.log('📞 Creating offer to call:', targetUserId);
+
       // Create offer
       const offer = await peerConnectionRef.current.createOffer();
       await peerConnectionRef.current.setLocalDescription(offer);
+
+      console.log('✅ Offer created, sending to:', targetUserId);
 
       // Send call to target user
       socketRef.current?.emit('callUser', {
@@ -46,10 +50,12 @@ const JoinScreen = ({ navigation }) => {
         callerName: callerId,
       });
 
+      console.log('📤 Call emitted via socket.io');
+
       navigation.navigate('OutgoingCall');
     } catch (error) {
-      console.error('Error initiating call:', error);
-      alert('Failed to initiate call');
+      console.error('❌ Error initiating call:', error);
+      alert('Failed to initiate call: ' + error.message);
     }
   };
 
