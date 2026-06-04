@@ -1,6 +1,6 @@
-import { StyleSheet } from 'react-native';
-import { NavigationContainer } from '@react-navigation/native';
-import React, { useEffect, useState, useRef, createContext } from 'react';
+import {StyleSheet} from 'react-native';
+import {NavigationContainer} from '@react-navigation/native';
+import React, {useEffect, useState, useRef, createContext} from 'react';
 import Root from './src/navigation/Root';
 import SocketIOClient from 'socket.io-client';
 
@@ -11,110 +11,97 @@ import {
   RTCSessionDescription,
 } from 'react-native-webrtc';
 
+import auth from '@react-native-firebase/auth';
+import database from '@react-native-firebase/database';
+
 // Create context for sharing WebRTC state across screens
 export const WebRTCContext = createContext();
 
 const navigationRef = React.createRef();
 
-// ICE servers config
+const SERVER_URL = 'http://192.168.18.41:3500';
+
 const ICE_SERVERS = {
   iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' },
+    {urls: 'stun:stun.l.google.com:19302'},
+    {urls: 'stun:stun1.l.google.com:19302'},
+    {urls: 'stun:stun2.l.google.com:19302'},
   ],
 };
 
 const App = () => {
   const [localStream, setLocalStream] = useState(null);
   const [remoteStream, setRemoteStream] = useState(null);
-  const [callerId] = useState(
+  const [otherUserId, setOtherUserId] = useState(null); // Socket.IO callerId of peer
+  const [callType, setCallType] = useState('JOIN');
+  const [callStatus, setCallStatus] = useState(null);
+  const [activeCallRef, setActiveCallRef] = useState(null); // Firebase ref to the active /calls doc
+
+  // A stable, random Socket.IO room identifier for this device session
+  const callerIdRef = useRef(
     Math.floor(100000 + Math.random() * 900000).toString(),
   );
-  const [otherUserId, setOtherUserId] = useState(null);
-  const [callType, setCallType] = useState('JOIN'); // JOIN, OUTGOING, INCOMING, WEBRTC_ROOM
-  const [callStatus, setCallStatus] = useState(null); // ringing, answered, rejected, ended
+  const callerId = callerIdRef.current;
 
   const socketRef = useRef(null);
   const peerConnectionRef = useRef(null);
-  // Use a ref to always have the latest otherUserId inside callbacks (avoids stale closure)
-  const otherUserIdRef = useRef(null);
+  const otherUserIdRef = useRef(null); // always-fresh peer callerId
+  const localStreamRef = useRef(null); // always-fresh localStream
 
-  // Keep otherUserIdRef in sync with state
+  // Keep refs in sync
   useEffect(() => {
     otherUserIdRef.current = otherUserId;
   }, [otherUserId]);
 
-  // Handle navigation based on call type changes
+  useEffect(() => {
+    localStreamRef.current = localStream;
+  }, [localStream]);
+
+  // Navigate when callType changes
   useEffect(() => {
     if (callType === 'INCOMING') {
-      console.log('Navigating to IncomingCall');
       navigationRef.current?.navigate('IncomingCall');
     } else if (callType === 'OUTGOING') {
-      console.log('Navigating to OutgoingCall');
       navigationRef.current?.navigate('OutgoingCall');
     } else if (callType === 'WEBRTC_ROOM') {
-      console.log('Navigating to WebRTCRoom');
       navigationRef.current?.navigate('WebRTCRoom');
     }
   }, [callType]);
 
-  // Initialize socket connection (once)
-  useEffect(() => {
-    socketRef.current = SocketIOClient('http://192.168.18.41:3500', {
-      transports: ['websocket'],
-      query: {
-        callerId,
-      },
-    });
-
-    return () => {
-      if (socketRef.current) {
-        socketRef.current.disconnect();
-      }
-    };
-  }, [callerId]);
-
   /**
-   * Create a fresh RTCPeerConnection and wire up all its event handlers.
-   * Call this once at startup and again after a call ends to reset state.
+   * Build a fresh RTCPeerConnection with local tracks attached.
+   * Call once at startup and again after every call ends.
    */
-  const createPeerConnection = localMediaStream => {
-    // Close any existing connection first
+  const createPeerConnection = stream => {
     if (peerConnectionRef.current) {
       peerConnectionRef.current.close();
     }
 
     const pc = new RTCPeerConnection(ICE_SERVERS);
 
-    // Add local tracks to the connection
-    if (localMediaStream) {
-      localMediaStream.getTracks().forEach(track => {
-        pc.addTrack(track, localMediaStream);
+    if (stream) {
+      stream.getTracks().forEach(track => {
+        pc.addTrack(track, stream);
       });
     }
 
-    // Receive remote stream
+    // Remote stream (modern API)
     pc.ontrack = event => {
-      console.log('🎥 Remote track received');
       if (event.streams && event.streams[0]) {
         setRemoteStream(event.streams[0]);
       }
     };
 
-    // Deprecated but kept as fallback for older react-native-webrtc versions
+    // Fallback for older react-native-webrtc
     pc.onaddstream = event => {
-      console.log('🎥 Remote stream added (legacy)');
       setRemoteStream(event.stream);
     };
 
-    // ICE candidate — use ref to always get the latest target user id
+    // ICE candidates — read otherUserIdRef at call-time (never stale)
     pc.onicecandidate = event => {
       if (event.candidate) {
-        const targetId = otherUserIdRef.current;
-        console.log('🧊 ICE candidate, sending to:', targetId);
         socketRef.current?.emit('ICEcandidate', {
-          calleeId: targetId,
+          calleeId: otherUserIdRef.current,
           rtcMessage: {
             type: 'candidate',
             candidate: event.candidate,
@@ -124,14 +111,14 @@ const App = () => {
     };
 
     pc.oniceconnectionstatechange = () => {
-      console.log('ICE state:', pc.iceConnectionState);
+      console.log('🧊 ICE state:', pc.iceConnectionState);
     };
 
     peerConnectionRef.current = pc;
     return pc;
   };
 
-  // Get local media stream (once), then create the initial peer connection
+  // Initialize media stream once, then create the first peer connection
   useEffect(() => {
     const init = async () => {
       try {
@@ -143,147 +130,195 @@ const App = () => {
             frameRate: {ideal: 30, max: 60},
           },
         });
-
-        console.log('🎤 Local stream obtained');
         setLocalStream(stream);
-        // Create connection with local stream already added
+        localStreamRef.current = stream;
         createPeerConnection(stream);
-      } catch (error) {
-        console.error('❌ Error accessing media devices:', error);
+      } catch (err) {
+        console.error('❌ getUserMedia error:', err);
       }
     };
-
     init();
 
-    return () => {
-      if (peerConnectionRef.current) {
-        peerConnectionRef.current.close();
-      }
-    };
+    return () => peerConnectionRef.current?.close();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Helper to reset call state and peer connection after a call ends
-  const resetCall = currentLocalStream => {
+  // Initialize Socket.IO and register this device's callerId in Firebase
+  useEffect(() => {
+    const socket = SocketIOClient(SERVER_URL, {
+      transports: ['websocket'],
+      query: {callerId},
+    });
+    socketRef.current = socket;
+
+    socket.on('connect', () => {
+      console.log('✅ Socket connected:', socket.id);
+      // Register callerId under the Firebase user so others can look it up
+      const uid = auth().currentUser?.uid;
+      if (uid) {
+        database().ref(`/users/${uid}`).update({socketCallerId: callerId});
+      }
+    });
+
+    socket.on('disconnect', () => console.log('❌ Socket disconnected'));
+
+    return () => socket.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Reset helper — recreates peer connection for next call
+  const resetCall = () => {
     setCallType('JOIN');
     setOtherUserId(null);
     setCallStatus(null);
     setRemoteStream(null);
-    // Recreate peer connection ready for next call
-    createPeerConnection(currentLocalStream);
+    setActiveCallRef(null);
+    createPeerConnection(localStreamRef.current);
   };
 
-  // Handle all socket events (once socket is ready)
+  // ─────────────────────────────────────────────
+  // INCOMING CALL DETECTION via Firebase /calls
+  // ─────────────────────────────────────────────
   useEffect(() => {
-    if (!socketRef.current) {
-      return;
-    }
+    // Wait until user is authenticated
+    const unsubscribe = auth().onAuthStateChanged(user => {
+      if (!user) return;
 
-    console.log('🔌 Setting up socket event listeners...');
+      const callsRef = database()
+        .ref('/calls')
+        .orderByChild('receiverId')
+        .equalTo(user.uid);
 
-    socketRef.current.on('connect', () => {
-      console.log('✅ Socket connected with ID:', socketRef.current.id);
+      const onNewCall = callsRef.on('child_added', async snapshot => {
+        const callData = snapshot.val();
+        if (!callData) return;
+
+        // Only handle ringing calls (not ones we already processed)
+        if (callData.status !== 'ringing') return;
+
+        // Don't answer our own outgoing calls
+        if (callData.callerId === user.uid) return;
+
+        console.log('📞 Incoming Firebase call from:', callData.callerName);
+
+        // Look up the caller's Socket.IO callerId from their Firebase profile
+        const callerSnap = await database()
+          .ref(`/users/${callData.callerId}/socketCallerId`)
+          .once('value');
+        const callerSocketId = callerSnap.val();
+
+        if (!callerSocketId) {
+          console.warn('⚠️ Caller socketCallerId not found in Firebase');
+          return;
+        }
+
+        // Save active call ref so IncomingCallScreen can update its status
+        const callFirebaseRef = database().ref(`/calls/${snapshot.key}`);
+        setActiveCallRef(callFirebaseRef);
+        setOtherUserId(callerSocketId);
+        otherUserIdRef.current = callerSocketId;
+        setCallStatus('ringing');
+        setCallType('INCOMING');
+      });
+
+      return () => callsRef.off('child_added', onNewCall);
     });
 
-    socketRef.current.on('disconnect', () => {
-      console.log('❌ Socket disconnected');
-    });
+    return () => unsubscribe();
+  }, []);
+
+  // ─────────────────────────────────────────────
+  // SOCKET.IO SIGNALING EVENTS
+  // ─────────────────────────────────────────────
+  useEffect(() => {
+    const socket = socketRef.current;
+    if (!socket) return;
 
     /**
-     * Server event: "newCall"  (server emits this when someone calls us)
-     * Payload: { callerId, rtcMessage }   where rtcMessage is the SDP offer
+     * "newCall" — someone sends us a WebRTC offer via Socket.IO.
+     * Payload: { callerId, rtcMessage }
      */
-    socketRef.current.on('newCall', async data => {
-      console.log('📞 Incoming call from:', data.callerId);
+    const onNewCall = async data => {
+      console.log('📡 Socket newCall from:', data.callerId);
       setOtherUserId(data.callerId);
       otherUserIdRef.current = data.callerId;
       setCallStatus('ringing');
 
       try {
-        if (peerConnectionRef.current) {
-          await peerConnectionRef.current.setRemoteDescription(
-            new RTCSessionDescription(data.rtcMessage),
-          );
-          console.log('✅ Remote description set from offer');
-        }
-      } catch (error) {
-        console.error('❌ Error setting remote description from offer:', error);
+        await peerConnectionRef.current?.setRemoteDescription(
+          new RTCSessionDescription(data.rtcMessage),
+        );
+      } catch (err) {
+        console.error('❌ setRemoteDescription (offer):', err);
       }
-
-      // Navigate AFTER remote description is set
-      setCallType('INCOMING');
-    });
+      // Only navigate if not already doing so via Firebase listener
+      setCallType(prev => (prev === 'INCOMING' ? prev : 'INCOMING'));
+    };
 
     /**
-     * Server event: "callAnswered"  (callee answered our outgoing call)
-     * Payload: { callee, rtcMessage }   where rtcMessage is the SDP answer
+     * "callAnswered" — callee accepted, sending back their SDP answer.
+     * Payload: { callee, rtcMessage }
      */
-    socketRef.current.on('callAnswered', async data => {
-      console.log('✅ Call answered by:', data.callee);
+    const onCallAnswered = async data => {
+      console.log('✅ callAnswered from:', data.callee);
       setCallStatus('answered');
-
       try {
-        if (peerConnectionRef.current) {
-          await peerConnectionRef.current.setRemoteDescription(
-            new RTCSessionDescription(data.rtcMessage),
-          );
-          console.log('✅ Remote description set from answer');
-        }
-      } catch (error) {
-        console.error('❌ Error setting remote description from answer:', error);
+        await peerConnectionRef.current?.setRemoteDescription(
+          new RTCSessionDescription(data.rtcMessage),
+        );
+      } catch (err) {
+        console.error('❌ setRemoteDescription (answer):', err);
       }
-
       setCallType('WEBRTC_ROOM');
-    });
+    };
 
     /**
-     * Server event: "ICEcandidate"
-     * Payload: { sender, rtcMessage }  where rtcMessage contains the candidate
+     * "ICEcandidate" — remote peer's ICE candidate.
+     * Payload: { sender, rtcMessage: { candidate } }
      */
-    socketRef.current.on('ICEcandidate', async data => {
+    const onIceCandidate = async data => {
       try {
         if (peerConnectionRef.current && data.rtcMessage?.candidate) {
           await peerConnectionRef.current.addIceCandidate(
             new RTCIceCandidate(data.rtcMessage.candidate),
           );
-          console.log('✅ ICE candidate added');
         }
-      } catch (error) {
-        console.error('❌ Error adding ICE candidate:', error);
+      } catch (err) {
+        console.error('❌ addIceCandidate:', err);
       }
-    });
+    };
 
-    // Call rejected by callee
-    socketRef.current.on('callRejected', () => {
+    const onCallRejected = () => {
       console.log('❌ Call rejected');
-      setCallType('JOIN');
-      setOtherUserId(null);
-      setCallStatus(null);
-    });
+      resetCall();
+    };
 
-    // Remote side ended the call
-    socketRef.current.on('endCall', () => {
-      console.log('📞 Call ended by remote');
-      resetCall(localStream);
-    });
+    const onEndCall = () => {
+      console.log('📵 Call ended by remote');
+      resetCall();
+    };
+
+    socket.on('newCall', onNewCall);
+    socket.on('callAnswered', onCallAnswered);
+    socket.on('ICEcandidate', onIceCandidate);
+    socket.on('callRejected', onCallRejected);
+    socket.on('endCall', onEndCall);
 
     return () => {
-      socketRef.current?.off('connect');
-      socketRef.current?.off('disconnect');
-      socketRef.current?.off('newCall');
-      socketRef.current?.off('callAnswered');
-      socketRef.current?.off('callRejected');
-      socketRef.current?.off('ICEcandidate');
-      socketRef.current?.off('endCall');
+      socket.off('newCall', onNewCall);
+      socket.off('callAnswered', onCallAnswered);
+      socket.off('ICEcandidate', onIceCandidate);
+      socket.off('callRejected', onCallRejected);
+      socket.off('endCall', onEndCall);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [localStream]);
+  }, []);
 
   const contextValue = {
     localStream,
     remoteStream,
-    callerId,
-    otherUserId,
+    callerId,      // Socket.IO room ID for this device
+    otherUserId,   // Socket.IO room ID of the remote peer
     setOtherUserId,
     callType,
     setCallType,
@@ -291,8 +326,8 @@ const App = () => {
     setCallStatus,
     socketRef,
     peerConnectionRef,
+    activeCallRef, // Firebase ref to /calls/<id> for status updates
     resetCall,
-    localStreamRef: localStream,
   };
 
   return (

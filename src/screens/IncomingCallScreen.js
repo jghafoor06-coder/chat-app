@@ -15,6 +15,8 @@ const IncomingCallScreen = ({ navigation }) => {
     setOtherUserId,
     peerConnectionRef,
     socketRef,
+    activeCallRef,
+    resetCall,
   } = useContext(WebRTCContext);
 
   const handleAnswerCall = async () => {
@@ -24,14 +26,15 @@ const IncomingCallScreen = ({ navigation }) => {
       const answer = await peerConnectionRef.current.createAnswer();
       await peerConnectionRef.current.setLocalDescription(answer);
 
-      // Server expects: "answerCall" event with { callerId, rtcMessage }
+      // Send SDP answer to caller via Socket.IO
       socketRef.current?.emit('answerCall', {
         callerId: otherUserId,
         rtcMessage: answer,
       });
 
-      // Navigation to WebRTCRoom is handled by App.jsx when "callAnswered" is received
-      // but since we are the callee, we navigate directly
+      // Update Firebase call status
+      activeCallRef?.update({status: 'answered'});
+
       setCallType('WEBRTC_ROOM');
       navigation.navigate('WebRTCRoom');
     } catch (error) {
@@ -40,11 +43,13 @@ const IncomingCallScreen = ({ navigation }) => {
   };
 
   const handleRejectCall = () => {
+    // Notify caller via Socket.IO
     socketRef.current?.emit('callRejected', {
-      to: otherUserId,
+      calleeId: otherUserId,
     });
-    setCallType('JOIN');
-    setOtherUserId(null);
+    // Update Firebase call status
+    activeCallRef?.update({status: 'rejected'});
+    resetCall();
     navigation.goBack();
   };
 

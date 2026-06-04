@@ -19,14 +19,14 @@ const WebRTCRoom = ({ navigation }) => {
     setCallType,
     setOtherUserId,
     socketRef,
+    resetCall,
   } = useContext(WebRTCContext);
 
   const handleEndCall = () => {
     socketRef.current?.emit('endCall', {
-      to: otherUserId,
+      calleeId: otherUserId,
     });
-    setCallType('JOIN');
-    setOtherUserId(null);
+    resetCall();
     navigation.goBack();
   };
 

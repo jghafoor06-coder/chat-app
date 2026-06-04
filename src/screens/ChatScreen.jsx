@@ -1,4 +1,5 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useContext } from 'react';
+import { WebRTCContext } from '../../App';
 import {
   View,
   Text,
@@ -37,6 +38,16 @@ import ImagePreviewModal from '../components/chat/ImagePreviewModal';
 const ChatScreen = ({ route, navigation }) => {
   const { user } = route.params || {};
   const currentUser = auth().currentUser;
+
+  // WebRTC context for initiating calls
+  const {
+    socketRef,
+    peerConnectionRef,
+    setOtherUserId,
+    setCallType,
+    setCallStatus,
+    callerId: mySocketCallerId,
+  } = useContext(WebRTCContext);
 
   if (!currentUser || !user) {
     return null;
@@ -701,59 +712,66 @@ const ChatScreen = ({ route, navigation }) => {
     closeMenu();
   };
   
-  //START ADUDIO CALL
+  //START AUDIO CALL (uses same WebRTC flow, audio-only)
   const startAudioCall = async () => {
-    try {
-      const callRef = database().ref('/calls').push();
-
-      await callRef.set({
-        callId: callRef.key,
-
-        callerId: currentUid,
-        receiverId: user.uid,
-
-        callerName: currentUser.displayName || receiverData?.username || 'User',
-
-        callerImage: currentUser.photoURL || '',
-
-        type: 'audio',
-
-        status: 'ringing',
-
-        createdAt: Date.now(),
-      });
-
-      console.log('Audio call created:', callRef.key);
-    } catch (error) {
-      console.log('START AUDIO CALL ERROR:', error);
-    }
+    await initiateCall('audio');
   };
 
   //START VIDEO CALL
   const startVideoCall = async () => {
-    try {
-      const callRef = database().ref('/calls').push();
+    await initiateCall('video');
+  };
 
+  /**
+   * Common call initiator.
+   * 1. Writes to Firebase /calls so the callee gets notified.
+   * 2. Looks up the callee's Socket.IO callerId from Firebase.
+   * 3. Creates a WebRTC offer and sends it via Socket.IO to the server.
+   */
+  const initiateCall = async type => {
+    try {
+      // 1. Look up receiver's Socket.IO callerId
+      const receiverSnap = await database()
+        .ref(`/users/${user.uid}/socketCallerId`)
+        .once('value');
+      const receiverSocketId = receiverSnap.val();
+
+      if (!receiverSocketId) {
+        console.warn('⚠️ Receiver is not connected to the call server');
+        return;
+      }
+
+      // 2. Write to Firebase /calls so App.jsx on the other device detects it
+      const callRef = database().ref('/calls').push();
       await callRef.set({
         callId: callRef.key,
-
         callerId: currentUid,
         receiverId: user.uid,
-
-        callerName: currentUser.displayName || receiverData?.username || 'User',
-
+        callerName:
+          currentUser.displayName || receiverData?.username || 'User',
         callerImage: currentUser.photoURL || '',
-
-        type: 'video',
-
+        type,
         status: 'ringing',
-
         createdAt: Date.now(),
       });
 
-      console.log('Video call created:', callRef.key);
+      // 3. Update our own state
+      setOtherUserId(receiverSocketId);
+      setCallStatus('ringing');
+      setCallType('OUTGOING');
+
+      // 4. Create WebRTC offer and send via Socket.IO
+      const offer = await peerConnectionRef.current.createOffer();
+      await peerConnectionRef.current.setLocalDescription(offer);
+
+      socketRef.current?.emit('call', {
+        calleeId: receiverSocketId,
+        rtcMessage: offer,
+      });
+
+      console.log('📤 WebRTC offer sent to socket room:', receiverSocketId);
     } catch (error) {
-      console.log('START VIDEO CALL ERROR:', error);
+      console.log('INITIATE CALL ERROR:', error);
     }
   };
 
