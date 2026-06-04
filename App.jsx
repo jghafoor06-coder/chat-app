@@ -143,7 +143,7 @@ const App = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Initialize Socket.IO and register this device's callerId in Firebase
+  // Initialize Socket.IO
   useEffect(() => {
     const socket = SocketIOClient(SERVER_URL, {
       transports: ['websocket'],
@@ -153,7 +153,7 @@ const App = () => {
 
     socket.on('connect', () => {
       console.log('✅ Socket connected:', socket.id);
-      // Register callerId under the Firebase user so others can look it up
+      // Register callerId immediately if already logged in
       const uid = auth().currentUser?.uid;
       if (uid) {
         database().ref(`/users/${uid}`).update({socketCallerId: callerId});
@@ -162,7 +162,21 @@ const App = () => {
 
     socket.on('disconnect', () => console.log('❌ Socket disconnected'));
 
-    return () => socket.disconnect();
+    // Also register when the user logs in AFTER the socket has connected
+    // (e.g. user was on login screen when socket first connected)
+    const unsubscribeAuth = auth().onAuthStateChanged(user => {
+      if (user && socketRef.current?.connected) {
+        database()
+          .ref(`/users/${user.uid}`)
+          .update({socketCallerId: callerId});
+        console.log('✅ socketCallerId registered for', user.uid);
+      }
+    });
+
+    return () => {
+      socket.disconnect();
+      unsubscribeAuth();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
