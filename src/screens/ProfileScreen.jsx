@@ -238,6 +238,15 @@ const ProfileScreen = ({ navigation }) => {
             />
           </View>
 
+          {/* VIDEO CALL BUTTON */}
+          <TouchableOpacity
+            style={styles.videoCallBtn}
+            onPress={() => navigation.navigate('JoinCall')}
+          >
+            <Ionicons name="call" size={22} color="#fff" />
+            <Text style={styles.videoCallText}>Start Video Call</Text>
+          </TouchableOpacity>
+
           {/* LOGOUT */}
           <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
             <Ionicons name="log-out-outline" size={22} color="#dc2626" />
@@ -420,6 +429,26 @@ const styles = StyleSheet.create({
 
   logoutText: {
     color: '#dc2626',
+    fontSize: 17,
+    fontWeight: '700',
+    marginLeft: 8,
+  },
+
+  videoCallBtn: {
+    width: '100%',
+    height: 58,
+    backgroundColor: '#10b981',
+    borderRadius: 18,
+    marginTop: 15,
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexDirection: 'row',
+    borderWidth: 1,
+    borderColor: '#059669',
+  },
+
+  videoCallText: {
+    color: '#fff',
     fontSize: 17,
     fontWeight: '700',
     marginLeft: 8,

@@ -165,6 +165,14 @@ const LoginScreen = ({ navigation }) => {
                 <Text style={styles.accountLink}>Create Account</Text>
               </TouchableOpacity>
             </View>
+
+            <TouchableOpacity
+              style={styles.videoCallButton}
+              onPress={() => navigation.navigate('JoinCall')}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.videoCallButtonText}>📞 Start Video Call</Text>
+            </TouchableOpacity>
           </>
         ) : (
           <>
@@ -213,6 +221,14 @@ const LoginScreen = ({ navigation }) => {
                   Create Account
                 </Text>
               </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.videoCallButton}
+              onPress={() => navigation.navigate('JoinCall')}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.videoCallButtonText}>📞 Start Video Call</Text>
             </TouchableOpacity>
           </>
         )}
@@ -319,5 +335,22 @@ const styles = StyleSheet.create({
     marginTop: 28,
     color: '#6b7280',
     fontSize: 13,
+  },
+
+  videoCallButton: {
+    backgroundColor: '#10b981',
+    padding: 12,
+    paddingHorizontal: 80,
+    borderRadius: 20,
+    alignItems: 'center',
+    marginTop: 20,
+    borderWidth: 2,
+    borderColor: '#059669',
+  },
+
+  videoCallButtonText: {
+    color: 'white',
+    fontWeight: '600',
+    fontSize: 15,
   },
 });

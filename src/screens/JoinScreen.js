@@ -1,4 +1,4 @@
-import React, {useEffect, useState, useRef} from 'react';
+import React, { useContext, useState } from 'react';
 import {
   Platform,
   KeyboardAvoidingView,
@@ -7,130 +7,132 @@ import {
   View,
   Text,
   TouchableOpacity,
+  StyleSheet,
 } from 'react-native';
-import TextInputContainer from './src/components/TextInputContainer';
+import { WebRTCContext } from '../../App';
+import TextInputContainer from '../components/TextInputContainer';
 
-export default function App({}) {
+const JoinScreen = ({ navigation }) => {
+  const {
+    callerId,
+    setOtherUserId,
+    setCallStatus,
+    setCallType,
+    peerConnectionRef,
+    socketRef,
+  } = useContext(WebRTCContext);
 
-  const [type, setType] = useState('JOIN');
+  const [targetUserId, setTargetUserId] = useState('');
 
-  const [callerId] = useState(
-    Math.floor(100000 + Math.random() * 900000).toString(),
+  const handleCallNow = async () => {
+    if (!targetUserId.trim()) {
+      alert('Please enter a caller ID');
+      return;
+    }
+
+    try {
+      setOtherUserId(targetUserId);
+      setCallStatus('ringing');
+      setCallType('OUTGOING');
+
+      // Create offer
+      const offer = await peerConnectionRef.current.createOffer();
+      await peerConnectionRef.current.setLocalDescription(offer);
+
+      // Send call to target user
+      socketRef.current?.emit('callUser', {
+        to: targetUserId,
+        signalData: offer,
+        callerName: callerId,
+      });
+
+      navigation.navigate('OutgoingCall');
+    } catch (error) {
+      console.error('Error initiating call:', error);
+      alert('Failed to initiate call');
+    }
+  };
+
+  return (
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      style={styles.container}
+    >
+      <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+        <View style={styles.content}>
+          <View style={styles.cardContainer}>
+            <Text style={styles.cardLabel}>Your Caller ID</Text>
+            <View style={styles.callerIdContainer}>
+              <Text style={styles.callerId}>{callerId}</Text>
+            </View>
+          </View>
+
+          <View style={styles.cardContainer}>
+            <Text style={styles.cardLabel}>Enter call ID of another user</Text>
+            <TextInputContainer
+              placeholder={'Enter Caller ID'}
+              value={targetUserId}
+              setValue={setTargetUserId}
+              keyboardType={'number-pad'}
+            />
+            <TouchableOpacity
+              onPress={handleCallNow}
+              style={styles.callButton}
+            >
+              <Text style={styles.callButtonText}>Call Now</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </TouchableWithoutFeedback>
+    </KeyboardAvoidingView>
   );
+};
 
-  const otherUserId = useRef(null);
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#050A0E',
+    justifyContent: 'center',
+    paddingHorizontal: 42,
+  },
+  content: {
+    flex: 1,
+    justifyContent: 'center',
+  },
+  cardContainer: {
+    backgroundColor: '#1A1C22',
+    padding: 40,
+    marginVertical: 12.5,
+    justifyContent: 'center',
+    borderRadius: 14,
+  },
+  cardLabel: {
+    fontSize: 18,
+    color: '#D0D4DD',
+    marginBottom: 15,
+  },
+  callerIdContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  callerId: {
+    fontSize: 32,
+    color: '#fff',
+    letterSpacing: 6,
+  },
+  callButton: {
+    height: 50,
+    backgroundColor: '#5568FE',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 12,
+    marginTop: 16,
+  },
+  callButtonText: {
+    fontSize: 16,
+    color: '#FFFFFF',
+    fontWeight: '600',
+  },
+});
 
-
-  const JoinScreen = () => {
-    return (
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={{
-          flex: 1,
-          backgroundColor: '#050A0E',
-          justifyContent: 'center',
-          paddingHorizontal: 42,
-        }}>
-        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-          <>
-            <View
-              style={{
-                padding: 35,
-                backgroundColor: '#1A1C22',
-                justifyContent: 'center',
-                alignItems: 'center',
-                borderRadius: 14,
-              }}>
-              <Text
-                style={{
-                  fontSize: 18,
-                  color: '#D0D4DD',
-                }}>
-                Your Caller ID
-              </Text>
-              <View
-                style={{
-                  flexDirection: 'row',
-                  marginTop: 12,
-                  alignItems: 'center',
-                }}>
-                <Text
-                  style={{
-                    fontSize: 32,
-                    color: '#ffff',
-                    letterSpacing: 6,
-                  }}>
-                  {callerId}
-                </Text>
-              </View>
-            </View>
-
-            <View
-              style={{
-                backgroundColor: '#1A1C22',
-                padding: 40,
-                marginTop: 25,
-                justifyContent: 'center',
-                borderRadius: 14,
-              }}>
-              <Text
-                style={{
-                  fontSize: 18,
-                  color: '#D0D4DD',
-                }}>
-                Enter call id of another user
-              </Text>
-              <TextInputContainer
-                placeholder={'Enter Caller ID'}
-                value={otherUserId.current}
-                setValue={text => {
-                  otherUserId.current = text;
-                }}
-                keyboardType={'number-pad'}
-              />
-              <TouchableOpacity
-                onPress={() => {
-                  setType('OUTGOING_CALL');
-                }}
-                style={{
-                  height: 50,
-                  backgroundColor: '#5568FE',
-                  justifyContent: 'center',
-                  alignItems: 'center',
-                  borderRadius: 12,
-                  marginTop: 16,
-                }}>
-                <Text
-                  style={{
-                    fontSize: 16,
-                    color: '#FFFFFF',
-                  }}>
-                  Call Now
-                </Text>
-              </TouchableOpacity>
-            </View>
-          </>
-        </TouchableWithoutFeedback>
-      </KeyboardAvoidingView>
-    );
-  };
-
-  const OutgoingCallScreen = () => {
-    return null
-  };
-
-  const IncomingCallScreen = () => {
-    return null
-  };
-
-  switch (type) {
-    case 'JOIN':
-      return JoinScreen();
-    case 'INCOMING_CALL':
-      return IncomingCallScreen();
-    case 'OUTGOING_CALL':
-      return OutgoingCallScreen();
-    default:
-      return null;
-  }
-}
+export default JoinScreen;
