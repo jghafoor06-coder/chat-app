@@ -135,6 +135,8 @@ const App = () => {
         createPeerConnection(stream);
       } catch (err) {
         console.error('❌ getUserMedia error:', err);
+        // Still create the peer connection so createOffer/createAnswer don't crash
+        createPeerConnection(null);
       }
     };
     init();
