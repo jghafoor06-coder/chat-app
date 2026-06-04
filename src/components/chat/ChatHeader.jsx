@@ -2,88 +2,93 @@ import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Image } from 'react-native';
 import Ionicons from '@react-native-vector-icons/ionicons';
 
-const ChatHeader = React.memo(({
-  receiverData,
-  navigation,
-  selectionMode,
-  selectedMessages,
-  onClearSelection,
-  onOpenMenu,
-}) => {
-  return (
-    <View style={styles.header}>
-      {selectionMode ? (
-        <>
-          <TouchableOpacity
-            onPress={onClearSelection}
-            style={{ padding: 4 }}
-            hitSlop={10}
-          >
-            <Ionicons name="close" size={24} color="#111827" />
-          </TouchableOpacity>
+const ChatHeader = React.memo(
+  ({
+    receiverData,
+    navigation,
+    selectionMode,
+    selectedMessages,
+    onClearSelection,
+    onOpenMenu,
 
-          <Text style={styles.selectedCount}>
-            {selectedMessages.length}
-          </Text>
-
-          <View style={styles.headerIcons}>
+    onAudioCall,
+    onVideoCall,
+  }) => {
+    return (
+      <View style={styles.header}>
+        {selectionMode ? (
+          <>
             <TouchableOpacity
-              onPress={onOpenMenu}
+              onPress={onClearSelection}
               style={{ padding: 4 }}
               hitSlop={10}
             >
-              <Ionicons name="ellipsis-vertical" size={24} color="#111827" />
+              <Ionicons name="close" size={24} color="#111827" />
             </TouchableOpacity>
-          </View>
-        </>
-      ) : (
-        <>
-          <TouchableOpacity onPress={() => navigation.goBack()}>
-            <Ionicons name="arrow-back" size={24} color="#111827" />
-          </TouchableOpacity>
 
-          <View style={styles.userSection}>
-            {receiverData?.profileImage &&
-            receiverData.profileImage.trim() !== '' ? (
-              <Image
-                source={{ uri: receiverData.profileImage }}
-                style={styles.avatar}
-              />
-            ) : (
-              <View style={styles.letterAvatar}>
-                <Text style={styles.letterText}>
-                  {receiverData?.username
-                    ? receiverData.username.charAt(0).toUpperCase()
-                    : 'U'}
-                </Text>
-              </View>
-            )}
-            <View style={{ marginLeft: 10 }}>
-              <Text style={styles.username}>
-                {receiverData?.username || 'User'}
-              </Text>
+            <Text style={styles.selectedCount}>{selectedMessages.length}</Text>
 
-              {receiverData?.online && (
-                <Text style={styles.online}>Online</Text>
-              )}
+            <View style={styles.headerIcons}>
+              <TouchableOpacity
+                onPress={onOpenMenu}
+                style={{ padding: 4 }}
+                hitSlop={10}
+              >
+                <Ionicons name="ellipsis-vertical" size={24} color="#111827" />
+              </TouchableOpacity>
             </View>
-          </View>
+          </>
+        ) : (
+          <>
+            <TouchableOpacity onPress={() => navigation.goBack()}>
+              <Ionicons name="arrow-back" size={24} color="#111827" />
+            </TouchableOpacity>
 
-          <View style={styles.headerIcons}>
-            <Ionicons
-              name="videocam-outline"
-              size={24}
-              color="#111827"
-              style={{ marginRight: 16 }}
-            />
+            <View style={styles.userSection}>
+              {receiverData?.profileImage &&
+              receiverData.profileImage.trim() !== '' ? (
+                <Image
+                  source={{ uri: receiverData.profileImage }}
+                  style={styles.avatar}
+                />
+              ) : (
+                <View style={styles.letterAvatar}>
+                  <Text style={styles.letterText}>
+                    {receiverData?.username
+                      ? receiverData.username.charAt(0).toUpperCase()
+                      : 'U'}
+                  </Text>
+                </View>
+              )}
+              <View style={{ marginLeft: 10 }}>
+                <Text style={styles.username}>
+                  {receiverData?.username || 'User'}
+                </Text>
 
-            <Ionicons name="call-outline" size={22} color="#111827" />
-          </View>
-        </>
-      )}
-    </View>
-  );
-});
+                {receiverData?.online && (
+                  <Text style={styles.online}>Online</Text>
+                )}
+              </View>
+            </View>
+
+            <View style={styles.headerIcons}>
+              <TouchableOpacity
+                onPress={onVideoCall}
+                style={{ marginRight: 16 }}
+              >
+                <Ionicons name="videocam-outline" size={24} color="#111827" />
+              </TouchableOpacity>
+
+              <TouchableOpacity onPress={onAudioCall}>
+                <Ionicons name="call-outline" size={22} color="#111827" />
+              </TouchableOpacity>
+            </View>
+          </>
+        )}
+      </View>
+    );
+  },
+);
 
 export default ChatHeader;
 

@@ -3,6 +3,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import AuthStack from './authstack/AuthStack';
 import TabNavigation from './homestack/HomeStack';
 import SplashScreen from '../screens/SplashScreen';
+import IncomingCallScreen from '../screens/IncomingCallScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -20,6 +21,7 @@ const Root = () => {
       <Stack.Screen name="Splash" component={SplashScreen} />
       <Stack.Screen name="authstack" component={AuthStack} />
       <Stack.Screen name="Tabnavigation" component={TabNavigation} />
+      <Stack.Screen name="IncomingCall" component={IncomingCallScreen} />
     </Stack.Navigator>
   );
 };

@@ -22,7 +22,11 @@ import database from '@react-native-firebase/database';
 import storage from '@react-native-firebase/storage';
 import axios from 'axios';
 
-import { updateChatSummaryOnSend, updateChatSummaryOnSeen, refreshChatSummary } from '../utils/chatSummary';
+import {
+  updateChatSummaryOnSend,
+  updateChatSummaryOnSeen,
+  refreshChatSummary,
+} from '../utils/chatSummary';
 import ChatHeader from '../components/chat/ChatHeader';
 import ChatInput from '../components/chat/ChatInput';
 import MessageBubble from '../components/chat/MessageBubble';
@@ -99,11 +103,13 @@ const ChatScreen = ({ route, navigation }) => {
     };
   }, []);
 
+  //START AUDIO CALL
   const getSelectedMessage = () => {
     if (selectedMessages.length !== 1) return null;
     return messages.find(msg => msg.id === selectedMessages[0]);
   };
 
+  // CHECK IF CURRENT USER CAN EDIT THE SELECTED MESSAGE
   const canEdit = () => {
     const messageToEdit = getSelectedMessage();
     return messageToEdit?.senderId === currentUid;
@@ -220,7 +226,12 @@ const ChatScreen = ({ route, navigation }) => {
     if (!messages.length) return;
     let hasUnseen = false;
     messages.forEach(msg => {
-      if (msg.senderId !== currentUid && !msg.seen && !msg.uploading && !msg.uploadingImage) {
+      if (
+        msg.senderId !== currentUid &&
+        !msg.seen &&
+        !msg.uploading &&
+        !msg.uploadingImage
+      ) {
         hasUnseen = true;
         database()
           .ref(`/chats/${chatId}/messages/${msg.id}`)
@@ -252,7 +263,13 @@ const ChatScreen = ({ route, navigation }) => {
       setMessages(prev => [...prev, localMessage]);
       await newMessageRef.set(msgData);
 
-      await updateChatSummaryOnSend(chatId, currentUid, user.uid, textMessage, msgData.createdAt);
+      await updateChatSummaryOnSend(
+        chatId,
+        currentUid,
+        user.uid,
+        textMessage,
+        msgData.createdAt,
+      );
 
       setTimeout(() => {
         flatListRef.current?.scrollToEnd({ animated: true });
@@ -345,12 +362,23 @@ const ChatScreen = ({ route, navigation }) => {
 
       await newMessageRef.set(msgData);
 
-      await updateChatSummaryOnSend(chatId, currentUid, user.uid, '📷 Photo', createdAt);
+      await updateChatSummaryOnSend(
+        chatId,
+        currentUid,
+        user.uid,
+        '📷 Photo',
+        createdAt,
+      );
 
       setMessages(prev =>
         prev.map(msg =>
           msg.id === newMessageRef.key
-            ? { ...msg, imageUrl: imageUrl, uploadingImage: false, localImage: undefined }
+            ? {
+                ...msg,
+                imageUrl: imageUrl,
+                uploadingImage: false,
+                localImage: undefined,
+              }
             : msg,
         ),
       );
@@ -403,10 +431,16 @@ const ChatScreen = ({ route, navigation }) => {
         (file.uri
           ? (() => {
               try {
-                return (file.uri.includes('%')
+                return (
+                  (file.uri.includes('%')
                     ? decodeURIComponent(file.uri)
                     : file.uri
-                  ).split('/').pop()?.split('?').shift() || '';
+                  )
+                    .split('/')
+                    .pop()
+                    ?.split('?')
+                    .shift() || ''
+                );
               } catch {
                 return '';
               }
@@ -417,7 +451,9 @@ const ChatScreen = ({ route, navigation }) => {
       const fileType = file.type || 'application/octet-stream';
 
       if (!fileUri) {
-        throw new Error('File URI is missing. File object: ' + JSON.stringify(file));
+        throw new Error(
+          'File URI is missing. File object: ' + JSON.stringify(file),
+        );
       }
 
       const ref = database().ref(`/chats/${chatId}/messages`);
@@ -442,7 +478,9 @@ const ChatScreen = ({ route, navigation }) => {
       }, 100);
 
       if (fileUri.startsWith('content://')) {
-        const tempPath = `${RNFS.TemporaryDirectoryPath}/${Date.now()}_${fileName}`;
+        const tempPath = `${
+          RNFS.TemporaryDirectoryPath
+        }/${Date.now()}_${fileName}`;
         await RNFS.copyFile(fileUri, tempPath);
         fileUri = tempPath;
       }
@@ -478,7 +516,13 @@ const ChatScreen = ({ route, navigation }) => {
 
       await newMessageRef.set(msgData);
 
-      await updateChatSummaryOnSend(chatId, currentUid, user.uid, `📄 ${fileName}`, createdAt);
+      await updateChatSummaryOnSend(
+        chatId,
+        currentUid,
+        user.uid,
+        `📄 ${fileName}`,
+        createdAt,
+      );
 
       setMessages(prev =>
         prev.map(msg =>
@@ -618,6 +662,7 @@ const ChatScreen = ({ route, navigation }) => {
     });
   };
 
+  // HANDLE LONG PRESS ON MESSAGE (to start selection)
   const handleLongPress = item => {
     if (!selectionMode) {
       setSelectedMessages([item.id]);
@@ -626,17 +671,20 @@ const ChatScreen = ({ route, navigation }) => {
     }
   };
 
+  // OPEN IMAGE PREVIEW
   const openImagePreview = imageUrl => {
     setImagePreviewUrl(imageUrl);
     setImagePreviewVisible(true);
   };
 
+  //OPEN FILE MESSAGE
   const openFileMessage = fileUrl => {
     Linking.openURL(fileUrl).catch(err =>
       console.log('OPEN FILE ERROR:', err.message),
     );
   };
 
+  // HANDLE MESSAGE PRESS (for selection or opening media)
   const handleMessagePress = item => {
     if (selectionMode) {
       toggleSelection(item.id);
@@ -647,9 +695,66 @@ const ChatScreen = ({ route, navigation }) => {
     }
   };
 
+  // CLEAR SELECTION
   const clearSelection = () => {
     setSelectedMessages([]);
     closeMenu();
+  };
+  
+  //START ADUDIO CALL
+  const startAudioCall = async () => {
+    try {
+      const callRef = database().ref('/calls').push();
+
+      await callRef.set({
+        callId: callRef.key,
+
+        callerId: currentUid,
+        receiverId: user.uid,
+
+        callerName: currentUser.displayName || receiverData?.username || 'User',
+
+        callerImage: currentUser.photoURL || '',
+
+        type: 'audio',
+
+        status: 'ringing',
+
+        createdAt: Date.now(),
+      });
+
+      console.log('Audio call created:', callRef.key);
+    } catch (error) {
+      console.log('START AUDIO CALL ERROR:', error);
+    }
+  };
+
+  //START VIDEO CALL
+  const startVideoCall = async () => {
+    try {
+      const callRef = database().ref('/calls').push();
+
+      await callRef.set({
+        callId: callRef.key,
+
+        callerId: currentUid,
+        receiverId: user.uid,
+
+        callerName: currentUser.displayName || receiverData?.username || 'User',
+
+        callerImage: currentUser.photoURL || '',
+
+        type: 'video',
+
+        status: 'ringing',
+
+        createdAt: Date.now(),
+      });
+
+      console.log('Video call created:', callRef.key);
+    } catch (error) {
+      console.log('START VIDEO CALL ERROR:', error);
+    }
   };
 
   return (
@@ -667,6 +772,8 @@ const ChatScreen = ({ route, navigation }) => {
           selectedMessages={selectedMessages}
           onClearSelection={clearSelection}
           onOpenMenu={openMenu}
+          onAudioCall={startAudioCall}
+          onVideoCall={startVideoCall}
         />
 
         {/* CHAT AREA */}
