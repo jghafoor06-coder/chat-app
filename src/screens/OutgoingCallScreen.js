@@ -4,6 +4,7 @@ import {
   Text,
   TouchableOpacity,
   StyleSheet,
+  Image,
 } from 'react-native';
 import { WebRTCContext } from '../../App';
 
@@ -11,17 +12,17 @@ const OutgoingCallScreen = ({ navigation }) => {
   const {
     otherUserId,
     callStatus,
-    setCallType,
-    setOtherUserId,
     socketRef,
+    activeCallPeerName,
+    activeCallPeerImage,
+    resetCall,
   } = useContext(WebRTCContext);
 
   const handleEndCall = () => {
     socketRef.current?.emit('endCall', {
       to: otherUserId,
     });
-    setCallType('JOIN');
-    setOtherUserId(null);
+    resetCall();
     navigation.goBack();
   };
 
@@ -33,7 +34,16 @@ const OutgoingCallScreen = ({ navigation }) => {
     <View style={styles.container}>
       <View style={styles.content}>
         <Text style={styles.label}>Calling to...</Text>
-        <Text style={styles.callerId}>{otherUserId}</Text>
+        {activeCallPeerImage ? (
+          <Image source={{ uri: activeCallPeerImage }} style={styles.peerAvatar} />
+        ) : (
+          <View style={styles.peerAvatarPlaceholder}>
+            <Text style={styles.peerAvatarLetter}>
+              {activeCallPeerName ? activeCallPeerName.charAt(0).toUpperCase() : '?'}
+            </Text>
+          </View>
+        )}
+        <Text style={styles.callerId}>{activeCallPeerName || otherUserId}</Text>
         <Text style={styles.statusText}>
           {callStatus === 'ringing' ? 'Ringing...' : callStatus}
         </Text>
@@ -72,8 +82,26 @@ const styles = StyleSheet.create({
     fontSize: 36,
     color: '#fff',
     fontWeight: 'bold',
-    letterSpacing: 6,
+    marginTop: 15,
     marginBottom: 20,
+  },
+  peerAvatar: {
+    width: 90,
+    height: 90,
+    borderRadius: 45,
+  },
+  peerAvatarPlaceholder: {
+    width: 90,
+    height: 90,
+    borderRadius: 45,
+    backgroundColor: '#5568FE',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  peerAvatarLetter: {
+    color: '#fff',
+    fontSize: 36,
+    fontWeight: 'bold',
   },
   statusText: {
     fontSize: 14,

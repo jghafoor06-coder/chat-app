@@ -4,6 +4,7 @@ import {
   Text,
   TouchableOpacity,
   StyleSheet,
+  Image,
 } from 'react-native';
 import { WebRTCContext } from '../../App';
 
@@ -12,10 +13,11 @@ const IncomingCallScreen = ({ navigation }) => {
     otherUserId,
     setCallType,
     setCallStatus,
-    setOtherUserId,
     peerConnectionRef,
     socketRef,
     activeCallRef,
+    activeCallPeerName,
+    activeCallPeerImage,
     resetCall,
   } = useContext(WebRTCContext);
 
@@ -47,9 +49,8 @@ const IncomingCallScreen = ({ navigation }) => {
     socketRef.current?.emit('callRejected', {
       calleeId: otherUserId,
     });
-    // Update Firebase call status
-    activeCallRef?.update({status: 'rejected'});
-    resetCall();
+    // Mark call as rejected in Firebase and clean up
+    resetCall('rejected');
     navigation.goBack();
   };
 
@@ -57,7 +58,16 @@ const IncomingCallScreen = ({ navigation }) => {
     <View style={styles.container}>
       <View style={styles.content}>
         <Text style={styles.label}>Incoming Call</Text>
-        <Text style={styles.callerId}>{otherUserId} is calling...</Text>
+        {activeCallPeerImage ? (
+          <Image source={{ uri: activeCallPeerImage }} style={styles.callerAvatar} />
+        ) : (
+          <View style={styles.callerAvatarPlaceholder}>
+            <Text style={styles.callerAvatarLetter}>
+              {activeCallPeerName ? activeCallPeerName.charAt(0).toUpperCase() : '?'}
+            </Text>
+          </View>
+        )}
+        <Text style={styles.callerId}>{activeCallPeerName || otherUserId} is calling...</Text>
       </View>
 
       <View style={styles.controlsContainer}>
@@ -101,6 +111,27 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: 'bold',
     textAlign: 'center',
+    marginTop: 15,
+  },
+  callerAvatar: {
+    width: 90,
+    height: 90,
+    borderRadius: 45,
+    marginTop: 10,
+  },
+  callerAvatarPlaceholder: {
+    width: 90,
+    height: 90,
+    borderRadius: 45,
+    backgroundColor: '#5568FE',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 10,
+  },
+  callerAvatarLetter: {
+    color: '#fff',
+    fontSize: 36,
+    fontWeight: 'bold',
   },
   controlsContainer: {
     flexDirection: 'row',

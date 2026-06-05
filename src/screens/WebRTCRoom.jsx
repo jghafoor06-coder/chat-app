@@ -19,6 +19,8 @@ const WebRTCRoom = ({ navigation }) => {
     setCallType,
     setOtherUserId,
     socketRef,
+    activeCallPeerName,
+    activeCallPeerImage,
     resetCall,
   } = useContext(WebRTCContext);
 
@@ -88,7 +90,7 @@ const WebRTCRoom = ({ navigation }) => {
       </View>
 
       <View style={styles.userInfoContainer}>
-        <Text style={styles.userIdText}>{otherUserId}</Text>
+        <Text style={styles.userIdText}>{activeCallPeerName || otherUserId}</Text>
         <Text style={styles.statusText}>{callStatus}</Text>
       </View>
     </View>

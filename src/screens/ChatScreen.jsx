@@ -11,6 +11,7 @@ import {
   Linking,
   TouchableOpacity,
   Animated,
+  Alert,
 } from 'react-native';
 
 import Ionicons from '@react-native-vector-icons/ionicons';
@@ -46,7 +47,8 @@ const ChatScreen = ({ route, navigation }) => {
     setOtherUserId,
     setCallType,
     setCallStatus,
-    callerId: mySocketCallerId,
+    setActiveCallPeerName,
+    setActiveCallPeerImage,
   } = useContext(WebRTCContext);
 
   if (!currentUser || !user) {
@@ -730,6 +732,12 @@ const ChatScreen = ({ route, navigation }) => {
    */
   const initiateCall = async type => {
     try {
+      // Guard: ensure WebRTC peer connection is ready before any side effects
+      if (!peerConnectionRef.current) {
+        Alert.alert('Error', 'Call system not ready. Please try again.');
+        return;
+      }
+
       // 1. Look up receiver's Socket.IO callerId
       const receiverSnap = await database()
         .ref(`/users/${user.uid}/socketCallerId`)
@@ -737,7 +745,10 @@ const ChatScreen = ({ route, navigation }) => {
       const receiverSocketId = receiverSnap.val();
 
       if (!receiverSocketId) {
-        console.warn('⚠️ Receiver is not connected to the call server');
+        Alert.alert(
+          'User Offline',
+          `${receiverData?.username || 'This user'} is not online and cannot receive calls right now.`,
+        );
         return;
       }
 
@@ -755,16 +766,22 @@ const ChatScreen = ({ route, navigation }) => {
         createdAt: Date.now(),
       });
 
-      // 3. Update our own state
+      // 3. Update our own state (triggers navigation to OutgoingCall screen)
       setOtherUserId(receiverSocketId);
       setCallStatus('ringing');
       setCallType('OUTGOING');
+
+      // Store receiver display info for call screens
+      setActiveCallPeerName(
+        receiverData?.username || 'User',
+      );
+      setActiveCallPeerImage(receiverData?.profileImage || null);
 
       // 4. Create WebRTC offer and send via Socket.IO
       const offer = await peerConnectionRef.current.createOffer();
       await peerConnectionRef.current.setLocalDescription(offer);
 
-      socketRef.current?.emit('call', {
+      socketRef.current.emit('call', {
         calleeId: receiverSocketId,
         rtcMessage: offer,
       });
@@ -772,6 +789,7 @@ const ChatScreen = ({ route, navigation }) => {
       console.log('📤 WebRTC offer sent to socket room:', receiverSocketId);
     } catch (error) {
       console.log('INITIATE CALL ERROR:', error);
+      Alert.alert('Call Failed', 'Unable to start the call. Please try again.');
     }
   };
 

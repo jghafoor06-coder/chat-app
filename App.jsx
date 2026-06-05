@@ -36,6 +36,9 @@ const App = () => {
   const [callType, setCallType] = useState('JOIN');
   const [callStatus, setCallStatus] = useState(null);
   const [activeCallRef, setActiveCallRef] = useState(null); // Firebase ref to the active /calls doc
+  // Display info for the other person in the call (name, image)
+  const [activeCallPeerName, setActiveCallPeerName] = useState(null);
+  const [activeCallPeerImage, setActiveCallPeerImage] = useState(null);
 
   // A stable, random Socket.IO room identifier for this device session
   const callerIdRef = useRef(
@@ -47,6 +50,7 @@ const App = () => {
   const peerConnectionRef = useRef(null);
   const otherUserIdRef = useRef(null); // always-fresh peer callerId
   const localStreamRef = useRef(null); // always-fresh localStream
+  const activeCallRefRef = useRef(null); // always-fresh Firebase call ref
 
   // Keep refs in sync
   useEffect(() => {
@@ -56,6 +60,10 @@ const App = () => {
   useEffect(() => {
     localStreamRef.current = localStream;
   }, [localStream]);
+
+  useEffect(() => {
+    activeCallRefRef.current = activeCallRef;
+  }, [activeCallRef]);
 
   // Navigate when callType changes
   useEffect(() => {
@@ -183,12 +191,25 @@ const App = () => {
   }, []);
 
   // Reset helper — recreates peer connection for next call
-  const resetCall = () => {
+  // @param endStatus - Firebase call status to write (e.g. 'ended', 'rejected', 'missed')
+  const resetCall = (endStatus = 'ended') => {
+    // Update Firebase call status for call history tracking
+    // Uses ref to avoid stale closure when called from socket event handlers
+    const ref = activeCallRefRef.current;
+    if (ref) {
+      try {
+        ref.update({status: endStatus, endedAt: Date.now()});
+      } catch (err) {
+        console.error('❌ Failed to update call status:', err);
+      }
+    }
     setCallType('JOIN');
     setOtherUserId(null);
     setCallStatus(null);
     setRemoteStream(null);
     setActiveCallRef(null);
+    setActiveCallPeerName(null);
+    setActiveCallPeerImage(null);
     createPeerConnection(localStreamRef.current);
   };
 
@@ -235,6 +256,10 @@ const App = () => {
         otherUserIdRef.current = callerSocketId;
         setCallStatus('ringing');
         setCallType('INCOMING');
+
+        // Store caller display info for call screens
+        setActiveCallPeerName(callData.callerName || null);
+        setActiveCallPeerImage(callData.callerImage || null);
       });
 
       return () => callsRef.off('child_added', onNewCall);
@@ -249,11 +274,7 @@ const App = () => {
   useEffect(() => {
     const socket = socketRef.current;
     if (!socket) return;
-
-    /**
-     * "newCall" — someone sends us a WebRTC offer via Socket.IO.
-     * Payload: { callerId, rtcMessage }
-     */
+    
     const onNewCall = async data => {
       console.log('📡 Socket newCall from:', data.callerId);
       setOtherUserId(data.callerId);
@@ -267,14 +288,10 @@ const App = () => {
       } catch (err) {
         console.error('❌ setRemoteDescription (offer):', err);
       }
-      // Only navigate if not already doing so via Firebase listener
+      
       setCallType(prev => (prev === 'INCOMING' ? prev : 'INCOMING'));
     };
 
-    /**
-     * "callAnswered" — callee accepted, sending back their SDP answer.
-     * Payload: { callee, rtcMessage }
-     */
     const onCallAnswered = async data => {
       console.log('✅ callAnswered from:', data.callee);
       setCallStatus('answered');
@@ -288,10 +305,6 @@ const App = () => {
       setCallType('WEBRTC_ROOM');
     };
 
-    /**
-     * "ICEcandidate" — remote peer's ICE candidate.
-     * Payload: { sender, rtcMessage: { candidate } }
-     */
     const onIceCandidate = async data => {
       try {
         if (peerConnectionRef.current && data.rtcMessage?.candidate) {
@@ -327,7 +340,7 @@ const App = () => {
       socket.off('callRejected', onCallRejected);
       socket.off('endCall', onEndCall);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, []);
 
   const contextValue = {
@@ -343,6 +356,10 @@ const App = () => {
     socketRef,
     peerConnectionRef,
     activeCallRef, // Firebase ref to /calls/<id> for status updates
+    activeCallPeerName,  // Display name of the other person in the call
+    activeCallPeerImage, // Profile image URL of the other person
+    setActiveCallPeerName,
+    setActiveCallPeerImage,
     resetCall,
   };
 

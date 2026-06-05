@@ -179,13 +179,6 @@ const SignupScreen = ({navigation}) => {
               </TouchableOpacity>
             </View>
 
-            <TouchableOpacity
-              style={styles.videoCallButton}
-              onPress={() => navigation.navigate('JoinCall')}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.videoCallButtonText}>📞 Start Video Call</Text>
-            </TouchableOpacity>
           </>
         ) : (
           <>
@@ -235,13 +228,6 @@ const SignupScreen = ({navigation}) => {
               </Text>
             </TouchableOpacity>
 
-            <TouchableOpacity
-              style={styles.videoCallButton}
-              onPress={() => navigation.navigate('JoinCall')}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.videoCallButtonText}>📞 Start Video Call</Text>
-            </TouchableOpacity>
           </>
         )}
       </Animated.View>
@@ -349,20 +335,4 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
 
-  videoCallButton: {
-    backgroundColor: '#10b981',
-    padding: 12,
-    paddingHorizontal: 80,
-    borderRadius: 20,
-    alignItems: 'center',
-    marginTop: 20,
-    borderWidth: 2,
-    borderColor: '#059669',
-  },
-
-  videoCallButtonText: {
-    color: 'white',
-    fontWeight: '600',
-    fontSize: 15,
-  },
 });
