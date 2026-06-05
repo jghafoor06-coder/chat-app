@@ -303,6 +303,7 @@ const App = () => {
         await peerConnectionRef.current?.setRemoteDescription(
           new RTCSessionDescription(data.rtcMessage),
         );
+        console.log('✅ Remote offer set, signaling state:', peerConnectionRef.current?.signalingState);
       } catch (err) {
         console.error('❌ setRemoteDescription (offer):', err);
       }
