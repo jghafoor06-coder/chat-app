@@ -44,7 +44,7 @@ const ChatScreen = ({ route, navigation }) => {
   const {
     socketRef,
     peerConnectionRef,
-    setOtherUserId,
+    setPeerUserId,
     setCallType,
     setCallStatus,
     setActiveCallPeerName,
@@ -752,14 +752,19 @@ const ChatScreen = ({ route, navigation }) => {
         return;
       }
 
-      // 2. Write to Firebase /calls so App.jsx on the other device detects it
+      // 2. Fetch caller's own username for the call record
+      const callerDataSnap = await database()
+        .ref(`/users/${currentUid}/username`)
+        .once('value');
+      const callerUsername = callerDataSnap.val();
+
+      // 3. Write to Firebase /calls so App.jsx on the other device detects it
       const callRef = database().ref('/calls').push();
       await callRef.set({
         callId: callRef.key,
         callerId: currentUid,
         receiverId: user.uid,
-        callerName:
-          currentUser.displayName || receiverData?.username || 'User',
+        callerName: callerUsername || currentUser.displayName || 'User',
         callerImage: currentUser.photoURL || '',
         type,
         status: 'ringing',
@@ -767,7 +772,9 @@ const ChatScreen = ({ route, navigation }) => {
       });
 
       // 3. Update our own state (triggers navigation to OutgoingCall screen)
-      setOtherUserId(receiverSocketId);
+      // Use synchronous setter so otherUserIdRef is updated immediately
+      // (critical: ICE candidates fire right after setLocalDescription)
+      setPeerUserId(receiverSocketId);
       setCallStatus('ringing');
       setCallType('OUTGOING');
 

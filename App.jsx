@@ -9,6 +9,7 @@ import {
   RTCPeerConnection,
   RTCIceCandidate,
   RTCSessionDescription,
+  MediaStream,
 } from 'react-native-webrtc';
 
 import auth from '@react-native-firebase/auth';
@@ -51,6 +52,14 @@ const App = () => {
   const otherUserIdRef = useRef(null); // always-fresh peer callerId
   const localStreamRef = useRef(null); // always-fresh localStream
   const activeCallRefRef = useRef(null); // always-fresh Firebase call ref
+
+  // Synchronous setter: updates both React state AND the ref immediately.
+  // This is critical because ICE candidates fire right after setLocalDescription
+  // and need otherUserIdRef to be correct for routing via Socket.IO.
+  const setPeerUserId = (id) => {
+    setOtherUserId(id);
+    otherUserIdRef.current = id;
+  };
 
   // Keep refs in sync
   useEffect(() => {
@@ -95,13 +104,20 @@ const App = () => {
 
     // Remote stream (modern API)
     pc.ontrack = event => {
+      console.log('📺 ontrack received:', event.track?.kind, '| streams:', event.streams?.length);
       if (event.streams && event.streams[0]) {
         setRemoteStream(event.streams[0]);
+      } else if (event.track) {
+        // Fallback: if tracks arrive without a stream wrapper, create one
+        console.log('📺 ontrack: track arrived without stream, creating MediaStream');
+        const stream = new MediaStream([event.track]);
+        setRemoteStream(stream);
       }
     };
 
     // Fallback for older react-native-webrtc
     pc.onaddstream = event => {
+      console.log('📺 onaddstream received');
       setRemoteStream(event.stream);
     };
 
@@ -119,7 +135,11 @@ const App = () => {
     };
 
     pc.oniceconnectionstatechange = () => {
-      console.log('🧊 ICE state:', pc.iceConnectionState);
+      console.log('🧊 ICE state:', pc.iceConnectionState, '| signaling:', pc.signalingState);
+    };
+
+    pc.onnegotiationneeded = () => {
+      console.log('🔄 Negotiation needed');
     };
 
     peerConnectionRef.current = pc;
@@ -204,7 +224,7 @@ const App = () => {
       }
     }
     setCallType('JOIN');
-    setOtherUserId(null);
+    setPeerUserId(null);
     setCallStatus(null);
     setRemoteStream(null);
     setActiveCallRef(null);
@@ -252,8 +272,7 @@ const App = () => {
         // Save active call ref so IncomingCallScreen can update its status
         const callFirebaseRef = database().ref(`/calls/${snapshot.key}`);
         setActiveCallRef(callFirebaseRef);
-        setOtherUserId(callerSocketId);
-        otherUserIdRef.current = callerSocketId;
+        setPeerUserId(callerSocketId);
         setCallStatus('ringing');
         setCallType('INCOMING');
 
@@ -277,8 +296,7 @@ const App = () => {
     
     const onNewCall = async data => {
       console.log('📡 Socket newCall from:', data.callerId);
-      setOtherUserId(data.callerId);
-      otherUserIdRef.current = data.callerId;
+      setPeerUserId(data.callerId);
       setCallStatus('ringing');
 
       try {
@@ -308,6 +326,7 @@ const App = () => {
     const onIceCandidate = async data => {
       try {
         if (peerConnectionRef.current && data.rtcMessage?.candidate) {
+          console.log('🧊 Received ICE candidate from peer');
           await peerConnectionRef.current.addIceCandidate(
             new RTCIceCandidate(data.rtcMessage.candidate),
           );
@@ -348,7 +367,7 @@ const App = () => {
     remoteStream,
     callerId,      // Socket.IO room ID for this device
     otherUserId,   // Socket.IO room ID of the remote peer
-    setOtherUserId,
+    setPeerUserId,  // Synchronous setter — use this when initiating calls
     callType,
     setCallType,
     callStatus,
