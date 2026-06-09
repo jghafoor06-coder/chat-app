@@ -49,6 +49,8 @@ const ChatScreen = ({ route, navigation }) => {
     setCallStatus,
     setActiveCallPeerName,
     setActiveCallPeerImage,
+    setActiveCallMode,
+    prepareLocalStreamForMode,
   } = useContext(WebRTCContext);
 
   if (!currentUser || !user) {
@@ -774,6 +776,8 @@ const ChatScreen = ({ route, navigation }) => {
       // 3. Update our own state (triggers navigation to OutgoingCall screen)
       // Use synchronous setter so otherUserIdRef is updated immediately
       // (critical: ICE candidates fire right after setLocalDescription)
+      setActiveCallMode(type);
+      await prepareLocalStreamForMode(type);
       setPeerUserId(receiverSocketId);
       setCallStatus('ringing');
       setCallType('OUTGOING');
@@ -830,6 +834,7 @@ const ChatScreen = ({ route, navigation }) => {
                 item={item}
                 currentUid={currentUid}
                 isSelected={selectedMessages.includes(item.id)}
+                selectionMode={selectionMode}
                 uploadProgress={uploadProgress}
                 onPress={() => handleMessagePress(item)}
                 onLongPress={() => handleLongPress(item)}

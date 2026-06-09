@@ -4,6 +4,7 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
+  Pressable,
   Image,
   Animated,
   ActivityIndicator,
@@ -64,6 +65,7 @@ const MessageBubble = React.memo(({
   item,
   currentUid,
   isSelected,
+  selectionMode,
   uploadProgress,
   onPress,
   onLongPress,
@@ -79,9 +81,12 @@ const MessageBubble = React.memo(({
 
   return (
     <AnimatedMessageItem>
-      <TouchableOpacity
-        activeOpacity={1}
-        onPress={onPress}
+      <Pressable
+        style={[
+          styles.messageRow,
+          isMe ? styles.myMessageRow : styles.receiverMessageRow,
+        ]}
+        onPress={selectionMode ? onPress : undefined}
         onLongPress={onLongPress}
         delayLongPress={300}
       >
@@ -104,34 +109,32 @@ const MessageBubble = React.memo(({
               (() => {
                 const imageUri = item.imageUrl || item.localImage;
                 return (
-                  <View style={{ position: 'relative' }}>
+                  <TouchableOpacity
+                    activeOpacity={0.8}
+                    onPress={!selectionMode ? onPress : undefined}
+                    style={styles.mediaTouchable}
+                  >
                     <Image
                       source={{ uri: imageUri }}
                       style={styles.messageImage}
                     />
                     {item.uploadingImage && (
                       <View
-                        style={{
-                          position: 'absolute',
-                          top: 0,
-                          left: 0,
-                          right: 0,
-                          bottom: 0,
-                          borderRadius: 18,
-                          backgroundColor: 'rgba(0,0,0,0.35)',
-                          justifyContent: 'center',
-                          alignItems: 'center',
-                        }}
+                        style={styles.uploadOverlay}
                       >
                         <ActivityIndicator size="large" color="#fff" />
                       </View>
                     )}
-                  </View>
+                  </TouchableOpacity>
                 );
               })()}
 
             {hasFile && (
-              <View style={styles.fileMessageBox}>
+              <TouchableOpacity
+                activeOpacity={0.8}
+                onPress={!selectionMode ? onPress : undefined}
+                style={[styles.fileMessageBox, styles.mediaTouchable]}
+              >
                 <View
                   style={{
                     width: 32,
@@ -203,7 +206,7 @@ const MessageBubble = React.memo(({
                     </Text>
                   ) : null}
                 </View>
-              </View>
+              </TouchableOpacity>
             )}
 
             {hasText && (
@@ -243,7 +246,7 @@ const MessageBubble = React.memo(({
             </Text>
           </View>
         </View>
-      </TouchableOpacity>
+      </Pressable>
     </AnimatedMessageItem>
   );
 });
@@ -271,6 +274,9 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: '100%',
   },
+  messageRow: {
+    width: '100%',
+  },
   messageContainer: {
     flexDirection: 'row',
     gap: 5,
@@ -281,6 +287,20 @@ const styles = StyleSheet.create({
   imageMessageContainer: {
     padding: 0,
     flexDirection: 'column',
+  },
+  mediaTouchable: {
+    alignSelf: 'flex-start',
+  },
+  uploadOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderRadius: 18,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   myMessage: {
     backgroundColor: '#0b5ed7',

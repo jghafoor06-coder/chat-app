@@ -40,6 +40,7 @@ const App = () => {
   // Display info for the other person in the call (name, image)
   const [activeCallPeerName, setActiveCallPeerName] = useState(null);
   const [activeCallPeerImage, setActiveCallPeerImage] = useState(null);
+  const [activeCallMode, setActiveCallMode] = useState(null);
 
   // A stable, random Socket.IO room identifier for this device session
   const callerIdRef = useRef(
@@ -146,24 +147,91 @@ const App = () => {
     return pc;
   };
 
+  const getMediaStream = async mode => {
+    try {
+      return await mediaDevices.getUserMedia({
+        audio: true,
+        video:
+          mode === 'video'
+            ? {
+                width: { min: 500, ideal: 720, max: 1280 },
+                height: { min: 300, ideal: 720, max: 1280 },
+                frameRate: { ideal: 30, max: 60 },
+              }
+            : false,
+      });
+    } catch (err) {
+      console.error('❌ getUserMedia error:', err);
+      return null;
+    }
+  };
+
+  const removeVideoTracks = stream => {
+    if (!stream) return;
+    stream.getVideoTracks().forEach(track => {
+      try {
+        track.stop();
+      } catch (_) {}
+      stream.removeTrack(track);
+    });
+  };
+
+  const prepareLocalStreamForMode = async mode => {
+    if (!peerConnectionRef.current) return;
+
+    if (mode === 'video') {
+      const hasVideo = localStreamRef.current?.getVideoTracks()?.length > 0;
+      if (hasVideo) {
+        return;
+      }
+
+      const stream = await getMediaStream('video');
+      if (!stream) return;
+
+      const newVideoTrack = stream.getVideoTracks()[0];
+      if (!newVideoTrack) return;
+
+      const audioTracks = localStreamRef.current?.getAudioTracks() || [];
+      const updatedStream = new MediaStream([...audioTracks, newVideoTrack]);
+      setLocalStream(updatedStream);
+      localStreamRef.current = updatedStream;
+      peerConnectionRef.current.addTrack(newVideoTrack, updatedStream);
+      return;
+    }
+
+    if (mode === 'audio') {
+      if (!localStreamRef.current?.getVideoTracks()?.length) {
+        return;
+      }
+
+      removeVideoTracks(localStreamRef.current);
+      const updatedStream = new MediaStream(localStreamRef.current.getAudioTracks());
+      setLocalStream(updatedStream);
+      localStreamRef.current = updatedStream;
+
+      const videoSenders = peerConnectionRef.current
+        .getSenders()
+        .filter(sender => sender.track?.kind === 'video');
+
+      videoSenders.forEach(sender => {
+        try {
+          peerConnectionRef.current.removeTrack(sender);
+        } catch (err) {
+          console.warn('Failed to remove video sender:', err);
+        }
+      });
+    }
+  };
+
   // Initialize media stream once, then create the first peer connection
   useEffect(() => {
     const init = async () => {
-      try {
-        const stream = await mediaDevices.getUserMedia({
-          audio: true,
-          video: {
-            width: {min: 500, ideal: 720, max: 1280},
-            height: {min: 300, ideal: 720, max: 1280},
-            frameRate: {ideal: 30, max: 60},
-          },
-        });
+      const stream = await getMediaStream('audio');
+      if (stream) {
         setLocalStream(stream);
         localStreamRef.current = stream;
         createPeerConnection(stream);
-      } catch (err) {
-        console.error('❌ getUserMedia error:', err);
-        // Still create the peer connection so createOffer/createAnswer don't crash
+      } else {
         createPeerConnection(null);
       }
     };
@@ -230,6 +298,7 @@ const App = () => {
     setActiveCallRef(null);
     setActiveCallPeerName(null);
     setActiveCallPeerImage(null);
+    setActiveCallMode(null);
     createPeerConnection(localStreamRef.current);
   };
 
@@ -275,6 +344,7 @@ const App = () => {
         setPeerUserId(callerSocketId);
         setCallStatus('ringing');
         setCallType('INCOMING');
+        setActiveCallMode(callData.type || 'audio');
 
         // Store caller display info for call screens
         setActiveCallPeerName(callData.callerName || null);
@@ -378,6 +448,9 @@ const App = () => {
     activeCallRef, // Firebase ref to /calls/<id> for status updates
     activeCallPeerName,  // Display name of the other person in the call
     activeCallPeerImage, // Profile image URL of the other person
+    activeCallMode,
+    setActiveCallMode,
+    prepareLocalStreamForMode,
     setActiveCallPeerName,
     setActiveCallPeerImage,
     resetCall,

@@ -22,8 +22,11 @@ const OutgoingCallScreen = ({ navigation }) => {
     activeCallPeerImage,
     localStream,
     peerConnectionRef,
+    activeCallMode,
     resetCall,
   } = useContext(WebRTCContext);
+
+  const isAudioOnly = activeCallMode === 'audio';
 
   // ── Call control states ──
   const [isMuted, setIsMuted] = useState(false);
@@ -247,7 +250,9 @@ const OutgoingCallScreen = ({ navigation }) => {
 
       {/* Top: label */}
       <View style={styles.topSection}>
-        <Text style={styles.label}>Outgoing Call</Text>
+        <Text style={styles.label}>
+          {isAudioOnly ? 'Outgoing Audio Call' : 'Outgoing Call'}
+        </Text>
       </View>
 
       {/* Center: avatar + name + status */}
@@ -286,13 +291,14 @@ const OutgoingCallScreen = ({ navigation }) => {
             <Text style={styles.controlLabel}>Speaker</Text>
           </View>
 
-          {/* Switch Camera */}
-          <View style={styles.controlItem}>
-            <TouchableOpacity style={styles.controlButton} onPress={handleSwitchCamera} activeOpacity={0.7}>
-              <Ionicons name="camera-reverse" size={22} color="#FFFFFF" />
-            </TouchableOpacity>
-            <Text style={styles.controlLabel}>Camera</Text>
-          </View>
+          {!isAudioOnly && (
+            <View style={styles.controlItem}>
+              <TouchableOpacity style={styles.controlButton} onPress={handleSwitchCamera} activeOpacity={0.7}>
+                <Ionicons name="camera-reverse" size={22} color="#FFFFFF" />
+              </TouchableOpacity>
+              <Text style={styles.controlLabel}>Camera</Text>
+            </View>
+          )}
 
           {/* End Call */}
           <View style={styles.controlItem}>

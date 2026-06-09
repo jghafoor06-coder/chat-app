@@ -20,8 +20,11 @@ const WebRTCRoom = ({ navigation }) => {
     socketRef,
     peerConnectionRef,
     activeCallPeerName,
+    activeCallMode,
     resetCall,
   } = useContext(WebRTCContext);
+
+  const isAudioOnly = activeCallMode === 'audio';
 
   // ── Call control states ──
   const [isMuted, setIsMuted] = useState(false);
@@ -158,8 +161,16 @@ const WebRTCRoom = ({ navigation }) => {
     <View style={styles.container} onTouchStart={resetHideTimer}>
       <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
 
-      {/* ── Remote video (fullscreen) ── */}
-      {remoteStream ? (
+      {/* ── Remote video / audio-only placeholder (fullscreen) ── */}
+      {isAudioOnly ? (
+        <View style={styles.audioCallContainer}>
+          <Ionicons name="call" size={72} color="#FFFFFF" />
+          <Text style={styles.audioCallLabel}>Audio Call</Text>
+          <Text style={styles.audioCallPeerName}>
+            {activeCallPeerName || otherUserId}
+          </Text>
+        </View>
+      ) : remoteStream ? (
         <RTCView
           streamURL={remoteStream.toURL()}
           style={styles.remoteVideo}
@@ -173,7 +184,7 @@ const WebRTCRoom = ({ navigation }) => {
       )}
 
       {/* ── Local video (PiP) ── */}
-      {localStream && (
+      {!isAudioOnly && localStream && (
         <View style={styles.localVideoContainer}>
           <RTCView
             streamURL={localStream.toURL()}
@@ -244,17 +255,18 @@ const WebRTCRoom = ({ navigation }) => {
               <Text style={styles.controlLabel}>Speaker</Text>
             </View>
 
-            {/* Switch Camera */}
-            <View style={styles.controlItem}>
-              <TouchableOpacity
-                style={styles.controlButton}
-                onPress={handleSwitchCamera}
-                activeOpacity={0.7}
-              >
-                <Ionicons name="camera-reverse" size={22} color="#FFFFFF" />
-              </TouchableOpacity>
-              <Text style={styles.controlLabel}>Camera</Text>
-            </View>
+            {!isAudioOnly && (
+              <View style={styles.controlItem}>
+                <TouchableOpacity
+                  style={styles.controlButton}
+                  onPress={handleSwitchCamera}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="camera-reverse" size={22} color="#FFFFFF" />
+                </TouchableOpacity>
+                <Text style={styles.controlLabel}>Camera</Text>
+              </View>
+            )}
 
             {/* End Call */}
             <View style={styles.controlItem}>
@@ -414,6 +426,29 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '500',
     color: 'rgba(255, 255, 255, 0.7)',
+  },
+  audioCallContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: '#111827',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+  },
+  audioCallLabel: {
+    color: '#D1D5DB',
+    fontSize: 22,
+    fontWeight: '600',
+    marginTop: 16,
+  },
+  audioCallPeerName: {
+    color: '#FFFFFF',
+    fontSize: 20,
+    fontWeight: '700',
+    marginTop: 8,
   },
   controlLabelActive: {
     color: '#FF5D5D',

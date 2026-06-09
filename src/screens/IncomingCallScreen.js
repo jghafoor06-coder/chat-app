@@ -13,11 +13,14 @@ const IncomingCallScreen = ({ navigation }) => {
     activeCallRef,
     activeCallPeerName,
     activeCallPeerImage,
+    activeCallMode,
+    prepareLocalStreamForMode,
     resetCall,
   } = useContext(WebRTCContext);
 
   const handleAnswerCall = async () => {
     try {
+      await prepareLocalStreamForMode(activeCallMode || 'audio');
       setCallStatus('answered');
 
       const answer = await peerConnectionRef.current.createAnswer();
@@ -52,7 +55,9 @@ const IncomingCallScreen = ({ navigation }) => {
   return (
     <View style={styles.container}>
       <View style={styles.content}>
-        <Text style={styles.label}>Incoming Call</Text>
+        <Text style={styles.label}>
+          {activeCallMode === 'video' ? 'Incoming Video Call' : 'Incoming Audio Call'}
+        </Text>
 
         {activeCallPeerImage ? (
           <Image
