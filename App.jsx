@@ -1,5 +1,5 @@
 import {Alert, StyleSheet} from 'react-native';
-import {NavigationContainer} from '@react-navigation/native';
+import {NavigationContainer, StackActions} from '@react-navigation/native';
 import React, {useEffect, useState, useRef, createContext} from 'react';
 import Root from './src/navigation/Root';
 import SocketIOClient from 'socket.io-client';
@@ -229,12 +229,23 @@ const App = () => {
 
   // Navigate when callType changes
   useEffect(() => {
+    console.log('CALL TYPE CHANGE:', callTypeRef.current, '→', callType);
+    
     if (callType === 'INCOMING') {
+      console.log('NAVIGATING TO: IncomingCall');
       navigationRef.current?.navigate('IncomingCall');
     } else if (callType === 'OUTGOING') {
+      console.log('NAVIGATING TO: OutgoingCall');
       navigationRef.current?.navigate('OutgoingCall');
     } else if (callType === 'WEBRTC_ROOM') {
-      navigationRef.current?.navigate('WebRTCRoom');
+      console.log('NAVIGATING TO: WebRTCRoom (replacing)');
+      navigationRef.current?.dispatch(StackActions.replace('WebRTCRoom'));
+    } else if (callType === 'JOIN') {
+      const currentRoute = navigationRef.current?.getCurrentRoute()?.name;
+      if (['IncomingCall', 'OutgoingCall', 'WebRTCRoom'].includes(currentRoute)) {
+        console.log('NAVIGATING TO: Back (Call Ended)');
+        navigationRef.current?.goBack();
+      }
     }
   }, [callType]);
 
@@ -638,6 +649,13 @@ const App = () => {
   // Reset helper — recreates peer connection for next call
   // @param endStatus - Firebase call status to write (e.g. 'ended', 'rejected', 'missed')
   const resetCall = async (endStatus = 'ended') => {
+    if (callTypeRef.current === 'JOIN') {
+      console.log('RESET CALL EXECUTED (ignored, already JOIN)');
+      return;
+    }
+    console.log('RESET CALL EXECUTED');
+    callTypeRef.current = 'JOIN'; // prevent duplicate execution
+    
     // Update Firebase call status for call history tracking
     // Uses ref to avoid stale closure when called from socket event handlers
     const ref = activeCallRefRef.current;
@@ -687,6 +705,8 @@ const App = () => {
   // INCOMING CALL DETECTION via Firebase /calls
   // ─────────────────────────────────────────────
   useEffect(() => {
+    const processedCalls = new Set(); // Prevent processing the same call multiple times
+
     // Wait until user is authenticated
     const unsubscribe = auth().onAuthStateChanged(user => {
       if (!user) return;
@@ -700,8 +720,28 @@ const App = () => {
         const callData = snapshot.val();
         if (!callData) return;
 
+        // Add Debug Logs
+        console.log('Incoming call detected:', snapshot.key, callData.status);
+        console.log('📞 Incoming call detected:', callData);
+        console.log('   Call age:', Date.now() - callData.createdAt);
+        console.log('   Call status:', callData.status);
+        console.log('   Receiver:', callData.receiverId);
+
+        if (processedCalls.has(snapshot.key)) {
+          console.log('Ignoring already processed call:', snapshot.key);
+          return;
+        }
+        processedCalls.add(snapshot.key);
+
         // Only handle ringing calls (not ones we already processed)
         if (callData.status !== 'ringing') return;
+
+        // Ignore stale incoming calls (older than 30 seconds)
+        const isRecent = Date.now() - callData.createdAt < 30000;
+        if (!isRecent) {
+          console.log('Ignoring stale incoming call. Age:', Date.now() - callData.createdAt);
+          return;
+        }
 
         // Don't answer our own outgoing calls
         if (callData.callerId === user.uid) return;
@@ -755,7 +795,12 @@ const App = () => {
 
         // Navigate to IncomingCallScreen immediately — it will show with a
         // disabled Answer button until the SDP offer arrives via Socket.IO.
-        setCallType('INCOMING');
+        if (
+          callData.receiverId === user.uid &&
+          callData.status === 'ringing'
+        ) {
+          setCallType('INCOMING');
+        }
 
         // Safety timeout: if the Socket.IO offer doesn't arrive within 10 seconds,
         // auto-reject the call as missed so the user isn't stuck on 'Connecting...'.
@@ -853,12 +898,12 @@ const App = () => {
 
     const onCallRejected = () => {
       console.log('❌ Call rejected');
-      resetCall();
+      resetCall('rejected');
     };
 
     const onEndCall = () => {
       console.log('📵 Call ended by remote');
-      resetCall();
+      resetCall('ended');
     };
 
     socket.on('newCall', onNewCall);

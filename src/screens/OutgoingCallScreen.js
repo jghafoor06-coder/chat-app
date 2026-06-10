@@ -140,7 +140,6 @@ const OutgoingCallScreen = ({ navigation }) => {
       InCallManager.stop();
     } catch (_) {}
     resetCall();
-    navigation.goBack();
   };
 
   // ── Toggle mute ──

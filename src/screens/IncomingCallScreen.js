@@ -73,8 +73,6 @@ const IncomingCallScreen = ({ navigation }) => {
       const signalingState = peerConnectionRef.current?.signalingState;
       console.log('[Answer] signalingState before createAnswer:', signalingState);
       
-      console.log('Audio tracks:', localStreamRef.current?.getAudioTracks() || []); 
-      
       console.log( 
         'Senders:', 
         peerConnectionRef.current?.getSenders().map(s => ({ 
@@ -137,7 +135,6 @@ const IncomingCallScreen = ({ navigation }) => {
     });
     // Mark call as rejected in Firebase and clean up
     resetCall('rejected');
-    navigation.goBack();
   };
 
   return (
