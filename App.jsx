@@ -42,6 +42,8 @@ const App = () => {
   const [activeCallPeerImage, setActiveCallPeerImage] = useState(null);
   const [activeCallMode, setActiveCallMode] = useState(null);
   const [isOfferReady, setIsOfferReady] = useState(false); // true only after SDP offer is set
+  const isAnswerProcessingRef = useRef(false); // prevent duplicate answer processing
+  const isOfferProcessingRef = useRef(false); // prevent duplicate offer processing
 
   // ── Diagnostic counters (refs so they never cause re-renders) ──
   const iceSentCountRef = useRef(0);
@@ -58,6 +60,7 @@ const App = () => {
   const otherUserIdRef = useRef(null); // always-fresh peer callerId
   const localStreamRef = useRef(null); // always-fresh localStream
   const activeCallRefRef = useRef(null); // always-fresh Firebase call ref
+  const callTypeRef = useRef(callType); // always-fresh callType
   const socketPermissionPromptedForUidRef = useRef(null);
   const missedCallTimeoutRef = useRef(null);
 
@@ -154,6 +157,10 @@ const App = () => {
   }, [localStream]);
 
   useEffect(() => {
+    callTypeRef.current = callType;
+  }, [callType]);
+
+  useEffect(() => {
     activeCallRefRef.current = activeCallRef;
 
     if (!activeCallRef) return;
@@ -175,7 +182,11 @@ const App = () => {
         setCallStatus('answered');
         try {
           const answer = JSON.parse(callData.answerMessage);
-          if (peerConnectionRef.current?.signalingState !== 'stable') {
+          if (
+            peerConnectionRef.current?.signalingState !== 'stable' &&
+            !isAnswerProcessingRef.current
+          ) {
+            isAnswerProcessingRef.current = true;
             await peerConnectionRef.current?.setRemoteDescription(
               new RTCSessionDescription(answer),
             );
@@ -239,6 +250,8 @@ const App = () => {
     // Reset diagnostic counters for this new call session
     iceSentCountRef.current = 0;
     iceReceivedCountRef.current = 0;
+    isAnswerProcessingRef.current = false;
+    isOfferProcessingRef.current = false;
 
     const pc = new RTCPeerConnection(ICE_SERVERS);
 
@@ -371,10 +384,32 @@ const App = () => {
 
     pc.onconnectionstatechange = () => {
       console.log('🔗 connectionState changed:', pc.connectionState);
+      console.log('CALL TYPE:', callTypeRef.current);
+      console.log('SIGNALING STATE:', pc.signalingState);
+      console.log('ICE STATE:', pc.iceConnectionState);
+      console.log('CONNECTION STATE:', pc.connectionState);
+      console.log('LOCAL AUDIO TRACKS:', localStreamRef.current?.getAudioTracks()?.length);
+      // Wait a moment for remote tracks to be available before logging
+      setTimeout(() => {
+        const senders = pc.getSenders() || [];
+        const receivers = pc.getReceivers() || [];
+        console.log('REMOTE AUDIO TRACKS:', receivers.filter(r => r.track?.kind === 'audio').length);
+        console.log('CURRENT REMOTE DESCRIPTION:', !!pc.currentRemoteDescription);
+        console.log('CURRENT LOCAL DESCRIPTION:', !!pc.currentLocalDescription);
+      }, 500);
     };
 
     pc.onsignalingstatechange = () => {
       console.log('📶 signalingState changed:', pc.signalingState);
+      console.log('CALL TYPE:', callTypeRef.current);
+      console.log('SIGNALING STATE:', pc.signalingState);
+      console.log('ICE STATE:', pc.iceConnectionState);
+      console.log('CONNECTION STATE:', pc.connectionState);
+      console.log('LOCAL AUDIO TRACKS:', localStreamRef.current?.getAudioTracks()?.length);
+      const receivers = pc.getReceivers() || [];
+      console.log('REMOTE AUDIO TRACKS:', receivers.filter(r => r.track?.kind === 'audio').length);
+      console.log('CURRENT REMOTE DESCRIPTION:', !!pc.currentRemoteDescription);
+      console.log('CURRENT LOCAL DESCRIPTION:', !!pc.currentLocalDescription);
     };
 
     pc.onnegotiationneeded = () => {
@@ -579,6 +614,8 @@ const App = () => {
     setActiveCallPeerImage(null);
     setActiveCallMode(null);
     setIsOfferReady(false);
+    isAnswerProcessingRef.current = false;
+    isOfferProcessingRef.current = false;
     createPeerConnection(localStreamRef.current);
   };
 
@@ -633,11 +670,14 @@ const App = () => {
         if (callData.rtcMessage) {
           try {
             const offer = JSON.parse(callData.rtcMessage);
-            await peerConnectionRef.current?.setRemoteDescription(
-              new RTCSessionDescription(offer)
-            );
-            console.log('✅ Remote offer set from Firebase, signaling state:', peerConnectionRef.current?.signalingState);
-            setIsOfferReady(true);
+            if (!isOfferProcessingRef.current && peerConnectionRef.current?.signalingState !== 'have-remote-offer') {
+              isOfferProcessingRef.current = true;
+              await peerConnectionRef.current?.setRemoteDescription(
+                new RTCSessionDescription(offer)
+              );
+              console.log('✅ Remote offer set from Firebase, signaling state:', peerConnectionRef.current?.signalingState);
+              setIsOfferReady(true);
+            }
             
             // Clear missed-call timeout since we have the offer
             if (missedCallTimeoutRef.current) {
@@ -686,12 +726,15 @@ const App = () => {
       setCallStatus('ringing');
 
       try {
-        await peerConnectionRef.current?.setRemoteDescription(
-          new RTCSessionDescription(data.rtcMessage),
-        );
-        const state = peerConnectionRef.current?.signalingState;
-        console.log('✅ setRemoteDescription(offer) done. signalingState:', state);
-        setIsOfferReady(true);
+        if (!isOfferProcessingRef.current && peerConnectionRef.current?.signalingState !== 'have-remote-offer') {
+          isOfferProcessingRef.current = true;
+          await peerConnectionRef.current?.setRemoteDescription(
+            new RTCSessionDescription(data.rtcMessage),
+          );
+          const state = peerConnectionRef.current?.signalingState;
+          console.log('✅ setRemoteDescription(offer) done. signalingState:', state);
+          setIsOfferReady(true);
+        }
         if (missedCallTimeoutRef.current) {
           clearTimeout(missedCallTimeoutRef.current);
           missedCallTimeoutRef.current = null;
@@ -707,12 +750,20 @@ const App = () => {
       console.log('   signalingState before setRemoteDescription:', peerConnectionRef.current?.signalingState);
       setCallStatus('answered');
       try {
-        await peerConnectionRef.current?.setRemoteDescription(
-          new RTCSessionDescription(data.rtcMessage),
-        );
-        console.log('✅ setRemoteDescription(answer) done. signalingState:', peerConnectionRef.current?.signalingState);
-        const senders = peerConnectionRef.current?.getSenders() || [];
-        console.log('   Senders after answer:', senders.map(s => `${s.track?.kind}(enabled=${s.track?.enabled})`));
+        if (
+          peerConnectionRef.current?.signalingState !== 'stable' &&
+          !isAnswerProcessingRef.current
+        ) {
+          isAnswerProcessingRef.current = true;
+          await peerConnectionRef.current?.setRemoteDescription(
+            new RTCSessionDescription(data.rtcMessage),
+          );
+          console.log('✅ setRemoteDescription(answer) done. signalingState:', peerConnectionRef.current?.signalingState);
+          const senders = peerConnectionRef.current?.getSenders() || [];
+          console.log('   Senders after answer:', senders.map(s => `${s.track?.kind}(enabled=${s.track?.enabled})`));
+        } else {
+          console.log('⚠️ setRemoteDescription(answer) skipped (already stable or processing)');
+        }
       } catch (err) {
         console.error('❌ setRemoteDescription (answer):', err);
       }
