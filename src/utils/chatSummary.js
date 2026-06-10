@@ -25,12 +25,16 @@ export const updateChatSummaryOnSend = async (
   updates[`/userChats/${receiverUid}/${chatId}/lastSender`] = senderUid;
   updates[`/userChats/${receiverUid}/${chatId}/lastTimestamp`] = timestamp;
 
-  await database().ref().update(updates);
-
-  // Atomically increment receiver's unread count
+  // Atomically increment receiver's unread count FIRST
+  // This ensures the counter is already incremented BEFORE the update() below
+  // triggers the receiver's messages listener. Otherwise the receiver's
+  // updateChatSummaryOnSeen (set to 0) could race with this transaction.
   await database()
     .ref(`/userChats/${receiverUid}/${chatId}/unreadCount`)
     .transaction(current => (current || 0) + 1);
+
+  // THEN write the summary fields (triggers receiver's listener)
+  await database().ref().update(updates);
 };
 
 /**

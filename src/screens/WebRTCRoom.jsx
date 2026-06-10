@@ -161,7 +161,6 @@ const WebRTCRoom = ({ navigation }) => {
     <View style={styles.container} onTouchStart={resetHideTimer}>
       <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
 
-      {/* ── Remote video / audio-only placeholder (fullscreen) ── */}
       {isAudioOnly ? (
         <View style={styles.audioCallContainer}>
           <Ionicons name="call" size={72} color="#FFFFFF" />
@@ -170,7 +169,7 @@ const WebRTCRoom = ({ navigation }) => {
             {activeCallPeerName || otherUserId}
           </Text>
         </View>
-      ) : remoteStream ? (
+      ) : remoteStream && remoteStream.getVideoTracks().length > 0 ? (
         <RTCView
           streamURL={remoteStream.toURL()}
           style={styles.remoteVideo}
@@ -179,12 +178,12 @@ const WebRTCRoom = ({ navigation }) => {
       ) : (
         <View style={styles.remoteVideoPlaceholder}>
           <Ionicons name="videocam" size={48} color="#4B5563" />
-          <Text style={styles.waitingText}>Waiting for video…</Text>
+          <Text style={styles.waitingText}>Connecting video…</Text>
         </View>
       )}
 
       {/* ── Local video (PiP) ── */}
-      {!isAudioOnly && localStream && (
+      {!isAudioOnly && localStream && localStream.getVideoTracks().length > 0 && (
         <View style={styles.localVideoContainer}>
           <RTCView
             streamURL={localStream.toURL()}

@@ -370,24 +370,24 @@ const Home = ({ navigation }) => {
           </View>
         </View>
 
-        {/* USERS LIST */}
-        <FlatList
-          data={sortedUsers}
-          keyExtractor={item => item.id}
-          renderItem={renderItem}
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.listContainer}
-          removeClippedSubviews={true}
-          maxToRenderPerBatch={10}
-          windowSize={7}
-          initialNumToRender={8}
-        />
-
-        {/* USER NOT FOUND */}
-        {filteredUsers.length === 0 && search.trim() !== '' && (
+        {/* USERS LIST — OR — CENTERED 'USER NOT FOUND' */}
+        {filteredUsers.length === 0 && search.trim() !== '' ? (
           <View style={styles.notFoundContainer}>
+            <Ionicons name="search-outline" size={48} color="#d1d5db" />
             <Text style={styles.notFoundText}>User not found</Text>
           </View>
+        ) : (
+          <FlatList
+            data={sortedUsers}
+            keyExtractor={item => item.id}
+            renderItem={renderItem}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.listContainer}
+            removeClippedSubviews={true}
+            maxToRenderPerBatch={10}
+            windowSize={7}
+            initialNumToRender={8}
+          />
         )}
       </View>
     </TouchableWithoutFeedback>
@@ -523,13 +523,16 @@ const styles = StyleSheet.create({
   },
 
   notFoundContainer: {
+    marginTop: 200,
+    justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 300,
+    textAlign: 'center',
   },
 
   notFoundText: {
     fontSize: 18,
     color: '#6b7280',
     fontWeight: '600',
+    textAlign: 'center',
   },
 });

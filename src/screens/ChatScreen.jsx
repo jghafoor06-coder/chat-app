@@ -225,7 +225,7 @@ const ChatScreen = ({ route, navigation }) => {
           ...data[key],
         }));
 
-        messageList.sort((a, b) => a.createdAt - b.createdAt);
+        messageList.sort((a, b) => (a.id < b.id ? -1 : (a.id > b.id ? 1 : 0)));
 
         setMessages(messageList);
       } else {
@@ -732,6 +732,9 @@ const ChatScreen = ({ route, navigation }) => {
    * 2. Looks up the callee's Socket.IO callerId from Firebase.
    * 3. Creates a WebRTC offer and sends it via Socket.IO to the server.
    */
+  // Add a ref to debounce call initiation
+  const isInitiatingCallRef = useRef(false);
+
   const initiateCall = async type => {
     try {
       // Guard: ensure WebRTC peer connection is ready before any side effects
@@ -740,11 +743,16 @@ const ChatScreen = ({ route, navigation }) => {
         return;
       }
 
-      // 1. Look up receiver's Socket.IO callerId
+      // Prevent double taps
+      if (isInitiatingCallRef.current) return;
+      isInitiatingCallRef.current = true;
+
+      // 1. Check socket permission of the receiver
       const receiverSnap = await database()
-        .ref(`/users/${user.uid}/socketCallerId`)
+        .ref(`/users/${receiverData.uid}`)
         .once('value');
-      const receiverSocketId = receiverSnap.val();
+      const rData = receiverSnap.val();
+      const receiverSocketId = rData?.socketCallerId;
 
       if (!receiverSocketId) {
         Alert.alert(
@@ -759,19 +767,6 @@ const ChatScreen = ({ route, navigation }) => {
         .ref(`/users/${currentUid}/username`)
         .once('value');
       const callerUsername = callerDataSnap.val();
-
-      // 3. Write to Firebase /calls so App.jsx on the other device detects it
-      const callRef = database().ref('/calls').push();
-      await callRef.set({
-        callId: callRef.key,
-        callerId: currentUid,
-        receiverId: user.uid,
-        callerName: callerUsername || currentUser.displayName || 'User',
-        callerImage: currentUser.photoURL || '',
-        type,
-        status: 'ringing',
-        createdAt: Date.now(),
-      });
 
       // 3. Update our own state (triggers navigation to OutgoingCall screen)
       // Use synchronous setter so otherUserIdRef is updated immediately
@@ -798,9 +793,29 @@ const ChatScreen = ({ route, navigation }) => {
       });
 
       console.log('📤 WebRTC offer sent to socket room:', receiverSocketId);
+
+      // 5. Write to Firebase /calls so App.jsx on the other device detects it
+      // Doing this AFTER the offer is sent ensures the receiver doesn't get stuck
+      // on 'Connecting...' while waiting for our camera to initialize.
+      // We also include the rtcMessage directly in Firebase so the receiver 
+      // doesn't have to rely on Socket.IO reconnecting in time when waking from background.
+      const callRef = database().ref('/calls').push();
+      await callRef.set({
+        callId: callRef.key,
+        callerId: currentUid,
+        receiverId: user.uid,
+        callerName: callerUsername || currentUser.displayName || 'User',
+        callerImage: currentUser.photoURL || '',
+        type,
+        status: 'ringing',
+        createdAt: Date.now(),
+        rtcMessage: JSON.stringify(offer),
+      });
     } catch (error) {
       console.log('INITIATE CALL ERROR:', error);
       Alert.alert('Call Failed', 'Unable to start the call. Please try again.');
+    } finally {
+      isInitiatingCallRef.current = false;
     }
   };
 
