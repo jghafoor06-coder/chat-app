@@ -71,6 +71,12 @@ const IncomingCallScreen = ({ navigation }) => {
       await prepareLocalStreamForMode(activeCallMode || 'audio');
 
       const signalingState = peerConnectionRef.current?.signalingState;
+      console.log('[Answer] signalingState before createAnswer:', signalingState);
+      console.log(
+        '[Answer] local tracks:',
+        peerConnectionRef.current?.getSenders().map(s => `${s.track?.kind}(enabled=${s.track?.enabled})`),
+      );
+
       if (signalingState !== 'have-remote-offer' && signalingState !== 'have-local-pranswer') {
         console.warn('Cannot answer — invalid signaling state:', signalingState);
         return;
@@ -79,22 +85,30 @@ const IncomingCallScreen = ({ navigation }) => {
       setCallStatus('answered');
 
       const answer = await peerConnectionRef.current.createAnswer();
+      console.log('[Answer] Answer created. SDP length:', answer.sdp?.length, 'chars');
+      console.log('   m-lines:', (answer.sdp?.match(/^m=/gm) || []).length);
+
       await peerConnectionRef.current.setLocalDescription(answer);
+      console.log('[Answer] setLocalDescription(answer) done. signalingState:', peerConnectionRef.current?.signalingState);
 
       // Send SDP answer to caller via Socket.IO
       socketRef.current?.emit('answerCall', {
         callerId: otherUserId,
         rtcMessage: answer,
       });
+      console.log('[Answer] Answer sent via Socket.IO to:', otherUserId);
 
-      // Update Firebase call status and include the SDP answer as a fallback
-      activeCallRef?.update({ 
+      // Update Firebase call status + SDP answer (fallback for caller)
+      activeCallRef?.update({
         status: 'answered',
-        answerMessage: JSON.stringify(answer)
+        answerMessage: JSON.stringify(answer),
       });
 
+      // FIX (BUG 6): Do NOT call navigation.navigate('WebRTCRoom') here.
+      // setCallType('WEBRTC_ROOM') drives navigation exclusively via App.jsx useEffect,
+      // which calls navigationRef.current?.navigate('WebRTCRoom').
+      // Calling both caused two WebRTCRoom screens to be pushed onto the stack.
       setCallType('WEBRTC_ROOM');
-      navigation.navigate('WebRTCRoom');
     } catch (error) {
       console.error('Error answering call:', error);
     }

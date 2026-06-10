@@ -8,7 +8,7 @@ import {
   Easing,
   StatusBar,
 } from 'react-native';
-import { mediaDevices } from 'react-native-webrtc';
+import { mediaDevices, RTCView } from 'react-native-webrtc';
 import Ionicons from '@react-native-vector-icons/ionicons';
 import InCallManager from 'react-native-incall-manager';
 import { WebRTCContext } from '../../App';
@@ -135,7 +135,7 @@ const OutgoingCallScreen = ({ navigation }) => {
   // ── End call ──
   const handleEndCall = () => {
     socketRef.current?.emit('endCall', {
-      to: otherUserId,
+      calleeId: otherUserId, // FIX (BUG 7): was 'to:', now matches WebRTCRoom and server expectation
     });
     try {
       InCallManager.stop();
@@ -248,6 +248,20 @@ const OutgoingCallScreen = ({ navigation }) => {
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
 
+      {/* FIX (BUG 1): Local camera PiP for video calls.
+          The OutgoingCallScreen previously had no RTCView at all, so the
+          caller never saw their own camera even during video calls. */}
+      {!isAudioOnly && localStream && localStream.getVideoTracks().length > 0 && (
+        <View style={styles.localVideoPreview}>
+          <RTCView
+            streamURL={localStream.toURL()}
+            style={styles.localVideoPreviewView}
+            objectFit="cover"
+            mirror
+          />
+        </View>
+      )}
+
       {/* Top: label */}
       <View style={styles.topSection}>
         <Text style={styles.label}>
@@ -322,6 +336,29 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#FFFFFF',
     justifyContent: 'space-between',
+  },
+
+  // ── Local camera PiP (video calls only) ──
+  localVideoPreview: {
+    position: 'absolute',
+    top: 20,
+    right: 16,
+    width: 100,
+    height: 148,
+    borderRadius: 12,
+    overflow: 'hidden',
+    borderWidth: 2,
+    borderColor: '#0b5ed7',
+    zIndex: 10,
+    elevation: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+  },
+  localVideoPreviewView: {
+    width: '100%',
+    height: '100%',
   },
 
   // ── Top section ──

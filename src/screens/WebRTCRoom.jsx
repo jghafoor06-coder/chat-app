@@ -169,7 +169,7 @@ const WebRTCRoom = ({ navigation }) => {
             {activeCallPeerName || otherUserId}
           </Text>
         </View>
-      ) : remoteStream && remoteStream.getVideoTracks().length > 0 ? (
+      ) : remoteStream ? (
         <RTCView
           streamURL={remoteStream.toURL()}
           style={styles.remoteVideo}

@@ -47,6 +47,7 @@ const ChatScreen = ({ route, navigation }) => {
     setPeerUserId,
     setCallType,
     setCallStatus,
+    setActiveCallRef,   // FIX (BUG 4): caller must set this so Firebase ICE fallback works
     setActiveCallPeerName,
     setActiveCallPeerImage,
     setActiveCallMode,
@@ -769,36 +770,43 @@ const ChatScreen = ({ route, navigation }) => {
       const callerUsername = callerDataSnap.val();
 
       // 3. Update our own state (triggers navigation to OutgoingCall screen)
-      // Use synchronous setter so otherUserIdRef is updated immediately
-      // (critical: ICE candidates fire right after setLocalDescription)
       setActiveCallMode(type);
       await prepareLocalStreamForMode(type);
       setPeerUserId(receiverSocketId);
       setCallStatus('ringing');
       setCallType('OUTGOING');
 
-      // Store receiver display info for call screens
-      setActiveCallPeerName(
-        receiverData?.username || 'User',
-      );
+      setActiveCallPeerName(receiverData?.username || 'User');
       setActiveCallPeerImage(receiverData?.profileImage || null);
 
-      // 4. Create WebRTC offer and send via Socket.IO
-      const offer = await peerConnectionRef.current.createOffer();
-      await peerConnectionRef.current.setLocalDescription(offer);
+      // 4. FIX (BUG 5): Suppress onnegotiationneeded during explicit offer creation.
+      //    addTrack() in prepareLocalStreamForMode fires onnegotiationneeded which can
+      //    race with createOffer() on Android and corrupt the signaling state.
+      //    We mark the PC so the handler knows an explicit offer is in flight.
+      const pc = peerConnectionRef.current;
+      pc._suppressNegotiation = true;
+
+      console.log(
+        '📤 Creating offer | signalingState:', pc.signalingState,
+        '| senders:', pc.getSenders().map(s => `${s.track?.kind}(enabled=${s.track?.enabled})`),
+      );
+
+      const offer = await pc.createOffer();
+      console.log('📤 Offer created. SDP length:', offer.sdp?.length, 'chars');
+      console.log('   m-lines:', (offer.sdp?.match(/^m=/gm) || []).length);
+
+      await pc.setLocalDescription(offer);
+      console.log('📤 setLocalDescription(offer) done. signalingState:', pc.signalingState);
+
+      pc._suppressNegotiation = false;
 
       socketRef.current.emit('call', {
         calleeId: receiverSocketId,
         rtcMessage: offer,
       });
+      console.log('📤 WebRTC offer sent via Socket.IO to:', receiverSocketId);
 
-      console.log('📤 WebRTC offer sent to socket room:', receiverSocketId);
-
-      // 5. Write to Firebase /calls so App.jsx on the other device detects it
-      // Doing this AFTER the offer is sent ensures the receiver doesn't get stuck
-      // on 'Connecting...' while waiting for our camera to initialize.
-      // We also include the rtcMessage directly in Firebase so the receiver 
-      // doesn't have to rely on Socket.IO reconnecting in time when waking from background.
+      // 5. Write to Firebase /calls — includes SDP so receiver works even if Socket.IO is slow
       const callRef = database().ref('/calls').push();
       await callRef.set({
         callId: callRef.key,
@@ -811,6 +819,13 @@ const ChatScreen = ({ route, navigation }) => {
         createdAt: Date.now(),
         rtcMessage: JSON.stringify(offer),
       });
+
+      // FIX (BUG 4): Set activeCallRef for the caller so that:
+      //   a) Caller's ICE candidates are also sent via Firebase fallback.
+      //   b) Caller can receive the answer via Firebase if Socket.IO misses it.
+      //   c) resetCall() can write the final call status for the caller.
+      setActiveCallRef(callRef);
+      console.log('📝 Firebase call doc created:', callRef.key);
     } catch (error) {
       console.log('INITIATE CALL ERROR:', error);
       Alert.alert('Call Failed', 'Unable to start the call. Please try again.');

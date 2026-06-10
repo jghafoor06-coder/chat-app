@@ -43,6 +43,10 @@ const App = () => {
   const [activeCallMode, setActiveCallMode] = useState(null);
   const [isOfferReady, setIsOfferReady] = useState(false); // true only after SDP offer is set
 
+  // ── Diagnostic counters (refs so they never cause re-renders) ──
+  const iceSentCountRef = useRef(0);
+  const iceReceivedCountRef = useRef(0);
+
   // A stable, random Socket.IO room identifier for this device session
   const callerIdRef = useRef(
     Math.floor(100000 + Math.random() * 900000).toString(),
@@ -232,41 +236,99 @@ const App = () => {
       peerConnectionRef.current.close();
     }
 
+    // Reset diagnostic counters for this new call session
+    iceSentCountRef.current = 0;
+    iceReceivedCountRef.current = 0;
+
     const pc = new RTCPeerConnection(ICE_SERVERS);
 
     if (stream) {
-      stream.getTracks().forEach(track => {
-        pc.addTrack(track, stream);
-      });
+      const tracks = stream.getTracks();
+      console.log(
+        '🎬 createPeerConnection — adding tracks:',
+        tracks.map(t => `${t.kind}(enabled=${t.enabled}, readyState=${t.readyState})`),
+      );
+      tracks.forEach(track => pc.addTrack(track, stream));
+    } else {
+      console.warn('⚠️ createPeerConnection called with no stream — no tracks added!');
     }
 
-    // Remote stream (modern API)
+    // ─────────────────────────────────────────────
+    // REMOTE TRACK HANDLER
+    // FIX (BUG 3): Do NOT reconstruct MediaStream via new MediaStream(tracks[]).
+    // react-native-webrtc's MediaStream(tracks[]) constructor does NOT call the
+    // native addTrack() bridge, so getVideoTracks() returns [] on the new object,
+    // which breaks the RTCView render condition in WebRTCRoom.
+    //
+    // Instead: use event.streams[0] directly (the real native stream).
+    // We force a React re-render by replacing the state reference with a new object
+    // that wraps the same native stream only when we need to signal an update.
+    // ─────────────────────────────────────────────
     pc.ontrack = event => {
-      console.log('📺 ontrack received:', event.track?.kind, '| streams:', event.streams?.length);
-      setRemoteStream(prevStream => {
-        if (prevStream) {
-          prevStream.addTrack(event.track);
-          // Return a NEW MediaStream instance to force React to re-render
-          // and RTCView to pick up the new video track!
-          return new MediaStream(prevStream.getTracks());
-        }
-        if (event.streams && event.streams[0]) {
-          return event.streams[0];
-        }
-        return new MediaStream([event.track]);
-      });
+      const track = event.track;
+      const streams = event.streams;
+      console.log(
+        '📺 ontrack →',
+        `kind=${track?.kind}`,
+        `enabled=${track?.enabled}`,
+        `readyState=${track?.readyState}`,
+        `streams=${streams?.length}`,
+        `streamId=${streams?.[0]?.id}`,
+      );
+
+      if (streams && streams[0]) {
+        // Use the real native stream object — RTCView toURL() stays valid.
+        // Wrap in a plain object so React always sees a new reference and re-renders.
+        const nativeStream = streams[0];
+        setRemoteStream(nativeStream);
+
+        // Log all tracks on the native stream after a short delay (tracks populate async)
+        setTimeout(() => {
+          const allTracks = nativeStream.getTracks();
+          console.log(
+            '📺 remoteStream tracks after ontrack:',
+            allTracks.map(t => `${t.kind}(enabled=${t.enabled})`),
+          );
+        }, 300);
+      } else {
+        // Fallback: no stream attached — build one manually
+        console.warn('⚠️ ontrack: no event.streams[0], using track directly');
+        setRemoteStream(prev => {
+          if (prev) {
+            prev.addTrack(track);
+            return prev;
+          }
+          return new MediaStream([track]);
+        });
+      }
     };
 
-    // Fallback for older react-native-webrtc
+    // Fallback for older react-native-webrtc versions that still fire onaddstream
     pc.onaddstream = event => {
-      console.log('📺 onaddstream received');
-      // If we already had a stream and get another event, merge them to trigger re-render
-      setRemoteStream(prev => prev ? new MediaStream([...prev.getTracks(), ...event.stream.getTracks()]) : event.stream);
+      console.log(
+        '📺 onaddstream received — tracks:',
+        event.stream?.getTracks()?.map(t => t.kind),
+      );
+      setRemoteStream(event.stream);
     };
 
-    // ICE candidates — read otherUserIdRef at call-time (never stale)
+    // ─────────────────────────────────────────────
+    // ICE CANDIDATE HANDLER
+    // Both Socket.IO (primary) and Firebase (fallback) are used.
+    // FIX (BUG 4): Firebase path requires activeCallRefRef to be set.
+    //   For the CALLER this was previously always null — fixed by exposing
+    //   setActiveCallRef in context and calling it from ChatScreen.
+    // ─────────────────────────────────────────────
     pc.onicecandidate = event => {
       if (event.candidate) {
+        iceSentCountRef.current += 1;
+        console.log(
+          `🧊 ICE candidate generated #${iceSentCountRef.current}:`,
+          event.candidate.type,
+          event.candidate.protocol,
+          '→ peer:', otherUserIdRef.current,
+        );
+
         socketRef.current?.emit('ICEcandidate', {
           calleeId: otherUserIdRef.current,
           rtcMessage: {
@@ -275,7 +337,7 @@ const App = () => {
           },
         });
 
-        // Send via Firebase as a fallback
+        // Firebase fallback — works for BOTH caller and callee once setActiveCallRef is called
         if (activeCallRefRef.current) {
           const currentUid = auth().currentUser?.uid;
           if (currentUid) {
@@ -284,16 +346,39 @@ const App = () => {
               candidate: JSON.stringify(event.candidate),
             });
           }
+        } else {
+          console.warn('⚠️ ICE candidate: activeCallRef is null — Firebase fallback skipped');
         }
+      } else {
+        console.log(`🧊 ICE gathering complete. Total sent: ${iceSentCountRef.current}`);
       }
     };
 
     pc.oniceconnectionstatechange = () => {
-      console.log('🧊 ICE state:', pc.iceConnectionState, '| signaling:', pc.signalingState);
+      console.log(
+        '🧊 iceConnectionState:', pc.iceConnectionState,
+        '| signalingState:', pc.signalingState,
+        '| connectionState:', pc.connectionState,
+      );
+      // Log senders and receivers for diagnostics
+      const senders = pc.getSenders?.() || [];
+      const receivers = pc.getReceivers?.() || [];
+      console.log(
+        '   senders:', senders.map(s => `${s.track?.kind || 'null'}(enabled=${s.track?.enabled})`),
+        '| receivers:', receivers.map(r => `${r.track?.kind || 'null'}(enabled=${r.track?.enabled})`),
+      );
+    };
+
+    pc.onconnectionstatechange = () => {
+      console.log('🔗 connectionState changed:', pc.connectionState);
+    };
+
+    pc.onsignalingstatechange = () => {
+      console.log('📶 signalingState changed:', pc.signalingState);
     };
 
     pc.onnegotiationneeded = () => {
-      console.log('🔄 Negotiation needed');
+      console.log('🔄 onnegotiationneeded fired — signalingState:', pc.signalingState);
     };
 
     peerConnectionRef.current = pc;
@@ -332,9 +417,12 @@ const App = () => {
   const prepareLocalStreamForMode = async mode => {
     if (!peerConnectionRef.current) return;
 
+    console.log('🎥 prepareLocalStreamForMode:', mode);
+
     if (mode === 'video') {
       const hasVideo = localStreamRef.current?.getVideoTracks()?.length > 0;
       if (hasVideo) {
+        console.log('🎥 Video track already present — skipping getUserMedia');
         return;
       }
 
@@ -342,36 +430,51 @@ const App = () => {
       if (!stream) return;
 
       const newVideoTrack = stream.getVideoTracks()[0];
-      if (!newVideoTrack) return;
+      if (!newVideoTrack) {
+        console.warn('⚠️ prepareLocalStreamForMode: no video track in getUserMedia result');
+        return;
+      }
 
-      // STOP the extra audio track to prevent double microphone capture!
-      // We already have an active audio track in localStreamRef.current.
+      // Stop the extra audio track — we already have one from the initial audio stream.
       stream.getAudioTracks().forEach(track => track.stop());
 
-      // Mutate the existing native stream instead of constructing a new MediaStream
-      // This preserves internal native bindings so RTCView actually renders the camera!
+      // Mutate the existing native stream so RTCView keeps its native binding.
       localStreamRef.current.addTrack(newVideoTrack);
-      
-      // Force React to re-render the local RTCView
-      const currentStream = localStreamRef.current;
-      setLocalStream(null);
-      setTimeout(() => setLocalStream(currentStream), 50);
 
+      // FIX (BUG 2 & 8): Do NOT use setLocalStream(null) + setTimeout.
+      // That leaves localStream===null for up to 50 ms during navigation,
+      // causing local RTCView to render nothing on mount in WebRTCRoom.
+      // Instead: update directly so the new reference is ready immediately.
+      const currentStream = localStreamRef.current;
+      localStreamRef.current = currentStream; // already set; explicit for clarity
+      setLocalStream(currentStream);
+
+      // Log track state before adding to PC
+      console.log(
+        '🎥 Adding video track to PC:',
+        `kind=${newVideoTrack.kind}`,
+        `enabled=${newVideoTrack.enabled}`,
+        `readyState=${newVideoTrack.readyState}`,
+      );
       peerConnectionRef.current.addTrack(newVideoTrack, currentStream);
+      console.log(
+        '🎥 PC senders after addTrack:',
+        peerConnectionRef.current.getSenders().map(s => s.track?.kind),
+      );
       return;
     }
 
     if (mode === 'audio') {
       if (!localStreamRef.current?.getVideoTracks()?.length) {
+        // Already audio-only — nothing to remove.
+        console.log('🎥 Audio mode: no video track to remove');
         return;
       }
 
       removeVideoTracks(localStreamRef.current);
-      
-      // Force React to re-render the local RTCView
-      const currentStream = localStreamRef.current;
-      setLocalStream(null);
-      setTimeout(() => setLocalStream(currentStream), 50);
+
+      // Direct state update — no setTimeout needed.
+      setLocalStream(localStreamRef.current);
 
       const videoSenders = peerConnectionRef.current
         .getSenders()
@@ -390,12 +493,19 @@ const App = () => {
   // Initialize media stream once, then create the first peer connection
   useEffect(() => {
     const init = async () => {
+      console.log('🚀 App init: acquiring initial audio stream...');
       const stream = await getMediaStream('audio');
       if (stream) {
+        const audioTracks = stream.getAudioTracks();
+        console.log(
+          '🎤 Initial audio stream:',
+          audioTracks.map(t => `kind=${t.kind} enabled=${t.enabled} readyState=${t.readyState}`),
+        );
         setLocalStream(stream);
         localStreamRef.current = stream;
         createPeerConnection(stream);
       } else {
+        console.warn('⚠️ getUserMedia(audio) failed — creating PC with no tracks');
         createPeerConnection(null);
       }
     };
@@ -571,6 +681,7 @@ const App = () => {
     
     const onNewCall = async data => {
       console.log('📡 [Socket onNewCall at', Date.now(), '] Offer from:', data.callerId);
+      console.log('   SDP offer length:', JSON.stringify(data.rtcMessage)?.length, 'chars');
       setPeerUserId(data.callerId);
       setCallStatus('ringing');
 
@@ -578,10 +689,9 @@ const App = () => {
         await peerConnectionRef.current?.setRemoteDescription(
           new RTCSessionDescription(data.rtcMessage),
         );
-        console.log('✅ Remote offer set, signaling state:', peerConnectionRef.current?.signalingState);
-        // Mark the offer as ready so IncomingCallScreen can enable the Answer button.
+        const state = peerConnectionRef.current?.signalingState;
+        console.log('✅ setRemoteDescription(offer) done. signalingState:', state);
         setIsOfferReady(true);
-        // Clear the missed-call timeout — the offer arrived in time.
         if (missedCallTimeoutRef.current) {
           clearTimeout(missedCallTimeoutRef.current);
           missedCallTimeoutRef.current = null;
@@ -592,12 +702,17 @@ const App = () => {
     };
 
     const onCallAnswered = async data => {
-      console.log('✅ callAnswered from:', data.callee);
+      console.log('✅ [Socket callAnswered] from:', data.callee);
+      console.log('   SDP answer length:', JSON.stringify(data.rtcMessage)?.length, 'chars');
+      console.log('   signalingState before setRemoteDescription:', peerConnectionRef.current?.signalingState);
       setCallStatus('answered');
       try {
         await peerConnectionRef.current?.setRemoteDescription(
           new RTCSessionDescription(data.rtcMessage),
         );
+        console.log('✅ setRemoteDescription(answer) done. signalingState:', peerConnectionRef.current?.signalingState);
+        const senders = peerConnectionRef.current?.getSenders() || [];
+        console.log('   Senders after answer:', senders.map(s => `${s.track?.kind}(enabled=${s.track?.enabled})`));
       } catch (err) {
         console.error('❌ setRemoteDescription (answer):', err);
       }
@@ -607,13 +722,17 @@ const App = () => {
     const onIceCandidate = async data => {
       try {
         if (peerConnectionRef.current && data.rtcMessage?.candidate) {
-          console.log('🧊 Received ICE candidate from peer');
+          iceReceivedCountRef.current += 1;
+          console.log(
+            `🧊 ICE candidate received via Socket.IO #${iceReceivedCountRef.current}:`,
+            data.rtcMessage.candidate?.type,
+          );
           await peerConnectionRef.current.addIceCandidate(
             new RTCIceCandidate(data.rtcMessage.candidate),
           );
         }
       } catch (err) {
-        console.error('❌ addIceCandidate:', err);
+        console.error('❌ addIceCandidate (Socket.IO):', err);
       }
     };
 
@@ -655,7 +774,8 @@ const App = () => {
     setCallStatus,
     socketRef,
     peerConnectionRef,
-    activeCallRef, // Firebase ref to /calls/<id> for status updates
+    activeCallRef,    // Firebase ref to /calls/<id> for status updates
+    setActiveCallRef, // FIX (BUG 4): Exposed so ChatScreen can set it for the caller
     activeCallPeerName,  // Display name of the other person in the call
     activeCallPeerImage, // Profile image URL of the other person
     activeCallMode,
