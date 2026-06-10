@@ -487,10 +487,18 @@ const App = () => {
         const senders = peerConnectionRef.current.getSenders();
         const audioSender = senders.find(s => s.track?.kind === 'audio');
         if (audioSender) {
-          peerConnectionRef.current.removeTrack(audioSender);
+          try {
+            await audioSender.replaceTrack(freshAudioTrack);
+            console.log('✅ Fresh audio track replaced via replaceTrack.');
+          } catch (err) {
+            console.warn('⚠️ replaceTrack failed, falling back to remove/add:', err);
+            peerConnectionRef.current.removeTrack(audioSender);
+            peerConnectionRef.current.addTrack(freshAudioTrack, localStreamRef.current);
+          }
+        } else {
+          peerConnectionRef.current.addTrack(freshAudioTrack, localStreamRef.current);
+          console.log('✅ Fresh audio track attached to PeerConnection (new sender).');
         }
-        peerConnectionRef.current.addTrack(freshAudioTrack, localStreamRef.current);
-        console.log('✅ Fresh audio track attached to PeerConnection.');
       }
     }
 
@@ -629,7 +637,7 @@ const App = () => {
 
   // Reset helper — recreates peer connection for next call
   // @param endStatus - Firebase call status to write (e.g. 'ended', 'rejected', 'missed')
-  const resetCall = (endStatus = 'ended') => {
+  const resetCall = async (endStatus = 'ended') => {
     // Update Firebase call status for call history tracking
     // Uses ref to avoid stale closure when called from socket event handlers
     const ref = activeCallRefRef.current;
@@ -656,7 +664,23 @@ const App = () => {
     setIsOfferReady(false);
     isAnswerProcessingRef.current = false;
     isOfferProcessingRef.current = false;
-    createPeerConnection(localStreamRef.current);
+
+    // Verify audio track health before resetting the peer connection
+    let streamToUse = localStreamRef.current;
+    if (streamToUse) {
+      const audioTrack = streamToUse.getAudioTracks()[0];
+      if (!audioTrack || !audioTrack.enabled || audioTrack.readyState === 'ended') {
+        console.warn('⚠️ resetCall: Audio track is dead. Acquiring fresh audio stream...');
+        const freshStream = await getMediaStream('audio');
+        if (freshStream) {
+          streamToUse = freshStream;
+          localStreamRef.current = freshStream;
+          setLocalStream(freshStream);
+        }
+      }
+    }
+
+    createPeerConnection(streamToUse);
   };
 
   // ─────────────────────────────────────────────

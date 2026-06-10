@@ -72,9 +72,25 @@ const IncomingCallScreen = ({ navigation }) => {
 
       const signalingState = peerConnectionRef.current?.signalingState;
       console.log('[Answer] signalingState before createAnswer:', signalingState);
-      console.log(
-        '[Answer] local tracks:',
-        peerConnectionRef.current?.getSenders().map(s => `${s.track?.kind}(enabled=${s.track?.enabled})`),
+      
+      console.log('Audio tracks:', localStreamRef.current?.getAudioTracks() || []); 
+      
+      console.log( 
+        'Senders:', 
+        peerConnectionRef.current?.getSenders().map(s => ({ 
+          kind: s.track?.kind, 
+          enabled: s.track?.enabled, 
+          readyState: s.track?.readyState, 
+        })) 
+      ); 
+      
+      console.log( 
+        'Receivers:', 
+        peerConnectionRef.current?.getReceivers().map(r => ({ 
+          kind: r.track?.kind, 
+          enabled: r.track?.enabled, 
+          readyState: r.track?.readyState, 
+        })) 
       );
 
       if (signalingState !== 'have-remote-offer' && signalingState !== 'have-local-pranswer') {
