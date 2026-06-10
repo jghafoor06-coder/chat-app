@@ -43,8 +43,15 @@ const WebRTCRoom = ({ navigation }) => {
 
     // Initialize InCallManager for audio routing
     try {
-      InCallManager.start();
-      InCallManager.setForceSpeakerphoneOn(true);
+      if (isAudioOnly) {
+        InCallManager.start({ media: 'audio' });
+        InCallManager.setForceSpeakerphoneOn(false);
+        setIsSpeakerOn(false);
+      } else {
+        InCallManager.start({ media: 'video' });
+        InCallManager.setForceSpeakerphoneOn(true);
+        setIsSpeakerOn(true);
+      }
     } catch (err) {
       console.warn('InCallManager start error:', err);
     }

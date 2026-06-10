@@ -261,6 +261,8 @@ const App = () => {
         '🎬 createPeerConnection — adding tracks:',
         tracks.map(t => `${t.kind}(enabled=${t.enabled}, readyState=${t.readyState})`),
       );
+      // Ensure we only add tracks that are live, but for now we just add them.
+      // Health is verified in prepareLocalStreamForMode before actual call.
       tracks.forEach(track => pc.addTrack(track, stream));
     } else {
       console.warn('⚠️ createPeerConnection called with no stream — no tracks added!');
@@ -285,6 +287,7 @@ const App = () => {
         `kind=${track?.kind}`,
         `enabled=${track?.enabled}`,
         `readyState=${track?.readyState}`,
+        `muted=${track?.muted}`,
         `streams=${streams?.length}`,
         `streamId=${streams?.[0]?.id}`,
       );
@@ -453,6 +456,43 @@ const App = () => {
     if (!peerConnectionRef.current) return;
 
     console.log('🎥 prepareLocalStreamForMode:', mode);
+
+    // Verify Audio Track Health before call
+    const currentAudioTracks = localStreamRef.current?.getAudioTracks() || [];
+    console.log(
+      '🎤 Checking audio track health:',
+      currentAudioTracks.map(t => `kind=${t.kind}, enabled=${t.enabled}, readyState=${t.readyState}`)
+    );
+
+    let audioTrack = currentAudioTracks[0];
+    const isAudioHealthy = audioTrack && audioTrack.enabled && audioTrack.readyState === 'live';
+
+    if (!isAudioHealthy) {
+      console.warn('⚠️ Audio track missing or ended. Acquiring fresh audio stream...');
+      const freshAudioStream = await getMediaStream('audio');
+      if (freshAudioStream) {
+        const freshAudioTrack = freshAudioStream.getAudioTracks()[0];
+        
+        if (localStreamRef.current) {
+          if (audioTrack) {
+            localStreamRef.current.removeTrack(audioTrack);
+          }
+          localStreamRef.current.addTrack(freshAudioTrack);
+        } else {
+          localStreamRef.current = freshAudioStream;
+        }
+        setLocalStream(localStreamRef.current);
+
+        // Replace track in peer connection
+        const senders = peerConnectionRef.current.getSenders();
+        const audioSender = senders.find(s => s.track?.kind === 'audio');
+        if (audioSender) {
+          peerConnectionRef.current.removeTrack(audioSender);
+        }
+        peerConnectionRef.current.addTrack(freshAudioTrack, localStreamRef.current);
+        console.log('✅ Fresh audio track attached to PeerConnection.');
+      }
+    }
 
     if (mode === 'video') {
       const hasVideo = localStreamRef.current?.getVideoTracks()?.length > 0;
