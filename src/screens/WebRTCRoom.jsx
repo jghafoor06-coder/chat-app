@@ -123,39 +123,45 @@ const WebRTCRoom = ({ navigation }) => {
   }, []);
 
   // ── Switch camera ──
-  const handleSwitchCamera = useCallback(async () => {
-    if (!localStream || !peerConnectionRef?.current) return;
+  // Uses react-native-webrtc's native _switchCamera() bridge method.
+  // This flips the hardware camera on the EXISTING track without:
+  //   - stopping or recreating the track
+  //   - modifying localStream (so RTCView.toURL() stays valid)
+  //   - touching the RTCPeerConnection (no renegotiation, no replaceTrack needed)
+  const handleSwitchCamera = useCallback(() => {
+    console.log('Switch camera pressed');
+    console.log('Current camera:', isFrontCamera ? 'front' : 'environment');
 
-    try {
-      const newFacingMode = isFrontCamera ? 'environment' : 'front';
-      const newStream = await mediaDevices.getUserMedia({
-        video: { facingMode: { exact: newFacingMode } },
-      });
-
-      const newVideoTrack = newStream.getVideoTracks()[0];
-      if (!newVideoTrack) return;
-
-      const sender = peerConnectionRef.current
-        .getSenders()
-        .find(s => s.track?.kind === 'video');
-
-      if (sender) {
-        const oldTrack = localStream.getVideoTracks()[0];
-        if (oldTrack) {
-          oldTrack.stop();
-          localStream.removeTrack(oldTrack);
-        }
-
-        localStream.addTrack(newVideoTrack);
-        await sender.replaceTrack(newVideoTrack);
-        setIsFrontCamera(prev => !prev);
-      } else {
-        newVideoTrack.stop();
-      }
-    } catch (err) {
-      console.error('Camera switch error:', err);
+    if (!localStream) {
+      console.warn('handleSwitchCamera: localStream is null — aborting');
+      return;
     }
-  }, [localStream, peerConnectionRef, isFrontCamera]);
+
+    const videoTrack = localStream.getVideoTracks()[0];
+
+    console.log('Video track exists:', !!videoTrack);
+    if (!videoTrack) {
+      console.warn('handleSwitchCamera: no video track found — aborting');
+      return;
+    }
+
+    console.log('Track enabled:', videoTrack.enabled);
+    console.log('Track readyState:', videoTrack.readyState);
+
+    if (videoTrack.readyState === 'ended') {
+      console.warn('handleSwitchCamera: video track is ended — cannot switch camera');
+      return;
+    }
+
+    if (typeof videoTrack._switchCamera === 'function') {
+      // Native react-native-webrtc camera flip — instant, zero side-effects
+      videoTrack._switchCamera();
+      setIsFrontCamera(prev => !prev);
+      console.log('✅ Camera switched via _switchCamera(). New facing:', isFrontCamera ? 'environment' : 'front');
+    } else {
+      console.warn('handleSwitchCamera: _switchCamera() not available on this track', videoTrack);
+    }
+  }, [localStream, isFrontCamera]);
 
   return (
     <View style={styles.container} onTouchStart={resetHideTimer}>
